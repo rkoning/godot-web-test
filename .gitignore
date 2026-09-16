@@ -15,3 +15,8 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+# Local web export output (CI produces this fresh on every run)
+/build/
+
+# NOTE: export_presets.cfg is intentionally tracked - CI cannot export without it.

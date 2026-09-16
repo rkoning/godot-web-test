@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.5"
+  GODOT_RELEASE: "stable"
+
+jobs:
+  export:
+    name: Web export (no deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/godot-export
+        with:
+          godot-version: ${{ env.GODOT_VERSION }}
+          godot-release: ${{ env.GODOT_RELEASE }}
+
+      - name: Upload build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build
+          retention-days: 7
