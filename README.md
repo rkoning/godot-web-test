@@ -1,24 +1,63 @@
 # Logistics Roguelike — web build
 
 Godot 4 project that exports to the web and publishes to GitHub Pages whenever a
-release is published. See [`one-pager.md`](one-pager.md) for the design.
+release is published, plus a Cloudflare Worker that hosts the shared state. See
+[`one-pager.md`](one-pager.md) for the game design.
+
+Right now the game is a smoke test for the whole pipeline: one button, one
+counter shared by everyone connected, and a random name per player.
 
 ## Layout
 
 ```
 game/                          Godot project root (project.godot lives here)
   export_presets.cfg           the "Web" preset — tracked on purpose, CI needs it
+  scripts/net_client.gd        WebSocket client: socket lifecycle → signals
+  scripts/net_config.gd        which server to talk to
+server/                        Cloudflare Worker: one Durable Object = one room
 .github/actions/godot-export/  composite action: install Godot, import, export, verify
-.github/workflows/ci.yml       export on every push/PR, no deploy
-.github/workflows/release.yml  export + deploy to Pages + attach zip to the release
+.github/workflows/ci.yml       export + Worker config check on every push/PR
+.github/workflows/release.yml  export → Pages, and deploy the Worker
 ```
+
+## How the multiplayer works
+
+GitHub Pages is static and a Godot web export can never host, so the
+authoritative state lives in a Cloudflare Worker. A single Durable Object
+(`idFromName("global")` — one global room) holds the counter in its storage and
+every connected socket in its hibernation list. The Godot client speaks plain
+JSON over one WebSocket; there is no Godot high-level multiplayer involved.
+
+| Direction | Message | Meaning |
+| --- | --- | --- |
+| server → client | `welcome` | your id + random name, current counter, roster |
+| server → client | `counter` | new value, and who clicked |
+| server → client | `roster` | somebody joined or left |
+| client → server | `click` | increment, please |
+| client → server | `ping` | keepalive, auto-answered without waking the object |
+
+The counter is persisted in Durable Object storage, so it survives the object
+being evicted and restarts at the value it had. Names are assigned server-side
+from two word lists and de-duplicated against the current room.
+
+The client reconnects on its own with exponential backoff (1s → 15s), and the
+button stays disabled until the server has sent `welcome`, so a click can never
+be dropped into a dead socket.
 
 ## One-time setup
 
 1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
    Without this the `deploy` job fails on the Pages API.
-2. Nothing else. No secrets, no tokens — `deploy-pages` uses the workflow's OIDC
-   identity and the release upload uses the built-in `GITHUB_TOKEN`.
+2. **Deploy the Worker once** (`cd server && npx wrangler deploy`) to find out
+   its URL, then set repository **variable** `SERVER_URL` to
+   `wss://<worker>.<subdomain>.workers.dev/ws`. The release workflow rewrites
+   `net_config.gd` with it before exporting; without it the build ships the
+   localhost endpoint and never connects.
+3. **Secrets** `CLOUDFLARE_API_TOKEN` (Edit Workers template) and
+   `CLOUDFLARE_ACCOUNT_ID`, so releases can redeploy the Worker.
+
+Pages itself needs no secrets — `deploy-pages` uses the workflow's OIDC identity
+and the release upload uses the built-in `GITHUB_TOKEN`.
 
 ## Publishing
 
@@ -52,11 +91,23 @@ caches them by version, so the first run after a bump is slower.
 
 Keep the version in `game/project.godot`'s `config/features` in sync.
 
-## Local export
+## Running it locally
+
+Two terminals. The client's default endpoint is already the wrangler dev one, so
+no configuration is needed.
 
 ```sh
+# 1. server
+cd server && npm install && npm run dev      # ws://127.0.0.1:8787/ws
+
+# 2. client
 cd game
 godot --headless --import
 godot --headless --export-release "Web" ../build/index.html
 cd ../build && python3 -m http.server 8000
 ```
+
+Open `http://127.0.0.1:8000` in two tabs and they share a counter.
+
+A deployed build can be pointed at another server without rebuilding:
+`https://…/?server=ws://127.0.0.1:8787/ws`.

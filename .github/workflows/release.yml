@@ -27,6 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Point the client at the deployed server
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER_URL}" ]; then
+            echo "::warning::SERVER_URL is unset; shipping the local-dev endpoint, so multiplayer will not connect."
+            exit 0
+          fi
+          sed -i "s#^const DEFAULT_SERVER_URL := .*#const DEFAULT_SERVER_URL := \"${SERVER_URL}\"#" \
+            game/scripts/net_config.gd
+          grep -n "DEFAULT_SERVER_URL :=" game/scripts/net_config.gd
+
       - uses: ./.github/actions/godot-export
         with:
           godot-version: ${{ env.GODOT_VERSION }}
@@ -46,6 +59,29 @@ jobs:
           set -euo pipefail
           zip -r "web-${TAG}.zip" build
           gh release upload "$TAG" "web-${TAG}.zip" --clobber
+
+  deploy-server:
+    name: Deploy Worker to Cloudflare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+        working-directory: server
+
+      # Independent of the Pages jobs on purpose: a Cloudflare misconfiguration
+      # fails loudly here without holding back the client deploy.
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server
 
   deploy:
     name: Deploy to GitHub Pages
