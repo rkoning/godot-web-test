@@ -25,6 +25,12 @@ jobs:
           godot-version: ${{ env.GODOT_VERSION }}
           godot-release: ${{ env.GODOT_RELEASE }}
 
+      # The battle sim runs without a renderer, so the acceptance criteria are
+      # checked here rather than by eye.
+      - name: Acceptance tests
+        working-directory: game
+        run: godot --headless --script tests/run_tests.gd
+
       - name: Upload build for inspection
         uses: actions/upload-artifact@v4
         with:

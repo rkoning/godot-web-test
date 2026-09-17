@@ -45,6 +45,10 @@ jobs:
           godot-version: ${{ env.GODOT_VERSION }}
           godot-release: ${{ env.GODOT_RELEASE }}
 
+      - name: Acceptance tests
+        working-directory: game
+        run: godot --headless --script tests/run_tests.gd
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
