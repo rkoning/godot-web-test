@@ -27,8 +27,11 @@ game/
   tests/run_tests.gd           acceptance checks, run headless in CI
 server/                        Cloudflare Worker: one Durable Object = one room
 .github/actions/godot-export/  composite action: install Godot, import, export, verify
+.github/actions/publish-pages/ pages.sh: publish or remove one directory of the site
 .github/workflows/ci.yml       tests + export + Worker config check on push/PR
-.github/workflows/release.yml  tests + export → Pages, and deploy the Worker
+.github/workflows/pr-preview.yml          playable preview per pull request
+.github/workflows/pr-preview-cleanup.yml  deletes it when the PR closes
+.github/workflows/release.yml  tests + export → site root, and deploy the Worker
 ```
 
 ## The combat prototype
@@ -124,33 +127,82 @@ The client reconnects on its own with exponential backoff (1s → 15s), and the
 button stays disabled until the server has sent `welcome`, so a click can never
 be dropped into a dead socket.
 
+## How deploys are laid out
+
+Everything lives on one `gh-pages` branch, which is the whole site:
+
+```
+/            the last published release
+/pr-12/      a playable preview of pull request 12
+/pr-15/      …one per open pull request
+```
+
+This is why the release does not use `actions/deploy-pages`: that action replaces
+the *entire* site on every deployment, so a pull request preview and the released
+build cannot coexist under it. `pages.sh` instead rewrites one directory of the
+branch and leaves the rest alone — publishing the root explicitly preserves every
+`pr-*` directory.
+
+Godot's web export uses only relative paths, so a build served from `/pr-12/`
+works untouched; nothing needs a base-path setting.
+
 ## One-time setup
 
-1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-   Without this the `deploy` job fails on the Pages API.
+1. **Settings → Pages → Build and deployment → Source: *Deploy from a branch*,
+   branch `gh-pages`, folder `/ (root)`.** The branch is created by the first
+   deploy, so do this after the first preview or release has run.
+That is everything the combat prototype needs: it runs entirely in the browser
+with no server, and the workflows push to `gh-pages` with the built-in
+`GITHUB_TOKEN`, so Pages needs no secrets.
+
+The counter demo additionally needs:
+
 2. **Deploy the Worker once** (`cd server && npx wrangler deploy`) to find out
    its URL, then set repository **variable** `SERVER_URL` to
    `wss://<worker>.<subdomain>.workers.dev/ws`. The release workflow rewrites
    `net_config.gd` with it before exporting; without it the build ships the
    localhost endpoint and never connects.
 3. **Secrets** `CLOUDFLARE_API_TOKEN` (Edit Workers template) and
-   `CLOUDFLARE_ACCOUNT_ID`, so releases can redeploy the Worker.
+   `CLOUDFLARE_ACCOUNT_ID`, so releases can redeploy the Worker. Without these
+   the `deploy-server` job fails, but it is an independent job — the game still
+   publishes.
 
-Pages itself needs no secrets — `deploy-pages` uses the workflow's OIDC identity
-and the release upload uses the built-in `GITHUB_TOKEN`.
+## Previewing a pull request
 
-## Publishing
+Open a pull request and `pr-preview.yml` builds it, runs the acceptance tests,
+publishes it to `https://<user>.github.io/<repo>/pr-<number>/`, and comments the
+link. Later pushes update that same comment; closing or merging the pull request
+deletes the directory.
+
+The tests gate the deploy rather than running alongside it — a preview of a build
+that fails its own acceptance checks is a trap.
+
+Two limits worth knowing:
+
+- **Forks cannot get a preview.** The workflow runs on `pull_request`, so a fork's
+  token is read-only and cannot publish. It reports this as a notice instead of
+  failing. Deliberately *not* `pull_request_target`, which would hand a write
+  token to unreviewed code. Push the branch to this repository to get a preview.
+- **Each preview is ~38 MB**, nearly all of it `index.wasm`. Git stores that blob
+  once per Godot version rather than once per push, so history grows by about
+  100 KB per push, but several open previews at once do count against the 1 GB
+  Pages site limit.
+
+## Publishing a release
 
 Cut a GitHub release (tag + publish). That fires `release.yml`, which:
 
 1. exports the `Web` preset headlessly with a pinned Godot version,
 2. verifies the export actually produced `index.{html,js,wasm,pck}` — Godot can
    exit 0 having written a blank page,
-3. deploys `build/` to Pages,
-4. attaches `web-<tag>.zip` to the release, so every release is downloadable and
+3. runs the acceptance tests,
+4. publishes `build/` to the site root, keeping every open preview,
+5. attaches `web-<tag>.zip` to the release, so every release is downloadable and
    reproducible independent of Pages.
 
-`workflow_dispatch` runs the same thing manually.
+`workflow_dispatch` runs the same thing manually. Note the site root only exists
+once a release (or a manual dispatch) has published; before that only the
+`/pr-<number>/` previews are served.
 
 ## Threads are off, deliberately
 

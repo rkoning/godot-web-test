@@ -1,0 +1,100 @@
+name: PR preview
+
+# Builds the pull request and publishes it to its own directory on the Pages
+# branch, so a change can be played in a browser before it is merged.
+#
+# Runs on `pull_request`, never `pull_request_target`: a preview is not worth
+# giving a pull request's own code a write token. That does mean a pull request
+# from a fork cannot deploy — its token is read-only — so those are reported
+# rather than failed.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# One preview build per pull request; a new push supersedes the one in flight.
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.5"
+  GODOT_RELEASE: "stable"
+
+jobs:
+  preview:
+    name: Build and publish preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check this pull request can be deployed
+        id: gate
+        env:
+          FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$FROM_FORK" = "true" ]; then
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::This pull request comes from a fork, so it has no write access \
+          and cannot publish a preview. Push the branch to this repository to get one."
+          else
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.deployable == 'true'
+
+      - uses: ./.github/actions/godot-export
+        if: steps.gate.outputs.deployable == 'true'
+        with:
+          godot-version: ${{ env.GODOT_VERSION }}
+          godot-release: ${{ env.GODOT_RELEASE }}
+
+      # A preview of a build that fails its own acceptance checks is a trap, so
+      # the tests gate the deploy rather than running beside it.
+      - name: Acceptance tests
+        if: steps.gate.outputs.deployable == 'true'
+        working-directory: game
+        run: godot --headless --script tests/run_tests.gd
+
+      - name: Publish preview
+        if: steps.gate.outputs.deployable == 'true'
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          .github/actions/publish-pages/pages.sh publish build "pr-${PR}" \
+            "Preview for PR #${PR} (${SHA})"
+
+      - name: Comment the preview link
+        if: steps.gate.outputs.deployable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner="${REPO%%/*}"
+          name="${REPO##*/}"
+          url="https://${owner}.github.io/${name}/pr-${PR}/"
+
+          body=$(printf '%s\n\n%s\n\n%s\n' \
+            "<!-- pages-preview -->### Playable preview" \
+            "**${url}**" \
+            "Built from \`${SHA}\`. Updates on every push; removed when this pull request closes. Pages can take a minute to serve a fresh deploy.")
+
+          # Update the existing preview comment instead of adding one per push.
+          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq 'map(select(.body | contains("<!-- pages-preview -->"))) | first | .id // empty')
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$body" >/dev/null
+            echo "Updated preview comment ${existing}."
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" -f body="$body" >/dev/null
+            echo "Posted preview comment."
+          fi
+
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"

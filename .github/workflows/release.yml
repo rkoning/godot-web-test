@@ -49,10 +49,13 @@ jobs:
         working-directory: game
         run: godot --headless --script tests/run_tests.gd
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: build
+      - name: Publish to the site root
+        if: github.event_name == 'release' || inputs.deploy
+        env:
+          REF: ${{ github.event.release.tag_name || github.sha }}
+        run: |
+          .github/actions/publish-pages/pages.sh publish build "" \
+            "Release build ${REF}"
 
       - name: Attach zipped build to the release
         if: github.event_name == 'release'
@@ -86,18 +89,3 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: server
-
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: build
-    if: github.event_name == 'release' || inputs.deploy
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
