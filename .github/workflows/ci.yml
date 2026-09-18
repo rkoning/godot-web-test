@@ -25,9 +25,35 @@ jobs:
           godot-version: ${{ env.GODOT_VERSION }}
           godot-release: ${{ env.GODOT_RELEASE }}
 
+      # The battle sim runs without a renderer, so the acceptance criteria are
+      # checked here rather than by eye.
+      - name: Acceptance tests
+        working-directory: game
+        run: godot --headless --script tests/run_tests.gd
+
       - name: Upload build for inspection
         uses: actions/upload-artifact@v4
         with:
           name: web-build
           path: build
           retention-days: 7
+
+  server:
+    name: Worker config check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+        working-directory: server
+
+      # Builds and validates wrangler.toml without touching Cloudflare, so a
+      # broken Worker fails the PR rather than the release.
+      - run: npm run check
+        working-directory: server

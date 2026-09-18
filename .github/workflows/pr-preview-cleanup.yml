@@ -1,0 +1,28 @@
+name: PR preview cleanup
+
+# Deletes a pull request's preview directory once it is merged or closed, so the
+# Pages branch does not accumulate one build per pull request forever.
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove preview
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove the preview directory
+        env:
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          .github/actions/publish-pages/pages.sh remove "pr-${PR}" \
+            "Remove preview for PR #${PR}"

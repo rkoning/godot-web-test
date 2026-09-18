@@ -1,13 +1,20 @@
-[gd_scene load_steps=3 format=3 uid="uid://b1vq0logisticsmain"]
+[gd_scene load_steps=4 format=3 uid="uid://b1vq0logisticsmain"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 bg_color = Color(0.113725, 0.141176, 0.2, 1)
-corner_radius_top_left = 12
-corner_radius_top_right = 12
-corner_radius_bottom_right = 12
-corner_radius_bottom_left = 12
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dot"]
+bg_color = Color(1, 1, 1, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -36,33 +43,89 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
 [node name="Margin" type="MarginContainer" parent="Center/Panel"]
 layout_mode = 2
-theme_override_constants/margin_left = 48
-theme_override_constants/margin_top = 40
-theme_override_constants/margin_right = 48
-theme_override_constants/margin_bottom = 40
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 32
 
 [node name="Rows" type="VBoxContainer" parent="Center/Panel/Margin"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 14
 
-[node name="Title" type="Label" parent="Center/Panel/Margin/Rows"]
+[node name="Header" type="HBoxContainer" parent="Center/Panel/Margin/Rows"]
 layout_mode = 2
-text = "Logistics Roguelike"
-horizontal_alignment = 1
+theme_override_constants/separation = 8
+alignment = 1
 
-[node name="Subtitle" type="Label" parent="Center/Panel/Margin/Rows"]
+[node name="StatusDot" type="Panel" parent="Center/Panel/Margin/Rows/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(12, 12)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/panel = SubResource("StyleBoxFlat_dot")
+
+[node name="StatusText" type="Label" parent="Center/Panel/Margin/Rows/Header"]
+unique_name_in_owner = true
 modulate = Color(0.678431, 0.733333, 0.803922, 1)
 layout_mode = 2
-text = "web build pipeline smoke test"
+text = "connecting…"
+
+[node name="Counter" type="Label" parent="Center/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 84
+text = "0"
 horizontal_alignment = 1
 
-[node name="Status" type="Label" parent="Center/Panel/Margin/Rows"]
+[node name="ClickButton" type="Button" parent="Center/Panel/Margin/Rows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+disabled = true
+text = "CLICK"
+
+[node name="LastClick" type="Label" parent="Center/Panel/Margin/Rows"]
+unique_name_in_owner = true
+modulate = Color(0.678431, 0.733333, 0.803922, 1)
+layout_mode = 2
+text = "nobody has clicked yet"
+horizontal_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="Center/Panel/Margin/Rows"]
+layout_mode = 2
+
+[node name="YouRow" type="HBoxContainer" parent="Center/Panel/Margin/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="YouLabel" type="Label" parent="Center/Panel/Margin/Rows/YouRow"]
+modulate = Color(0.678431, 0.733333, 0.803922, 1)
+layout_mode = 2
+text = "you are"
+
+[node name="You" type="Label" parent="Center/Panel/Margin/Rows/YouRow"]
+unique_name_in_owner = true
 modulate = Color(0.368627, 0.784314, 0.627451, 1)
 layout_mode = 2
-text = "…"
+text = "—"
+
+[node name="PlayersTitle" type="Label" parent="Center/Panel/Margin/Rows"]
+modulate = Color(0.478431, 0.533333, 0.603922, 1)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "IN THE ROOM"
 horizontal_alignment = 1
+
+[node name="PlayerList" type="VBoxContainer" parent="Center/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
