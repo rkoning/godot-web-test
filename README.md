@@ -98,6 +98,47 @@ flips it but is not monotonic, so archers are the cleaner knob. The shipped
 numbers are the spec's, and a test records the near miss so changing the table
 does not silently move it.
 
+## Playing on a phone
+
+The same build serves desktop and mobile; nothing is forked.
+
+**Scaling.** The project uses `stretch/mode = disabled` and sets the window's
+`content_scale_factor` to the device pixel ratio at start-up (physical canvas
+width ÷ `window.innerWidth`), so one logical pixel is one CSS pixel on every
+device. The earlier `canvas_items` stretch with a 1280×720 base shrank the
+whole canvas to fit a phone — on a 390 px screen that is 0.3×, which is why the
+buttons were unreadable. Every button is now at least 44 logical px tall and
+the HUD rows wrap (`HFlowContainer`) instead of clipping.
+
+**Input**, identical on both zooms:
+
+| | Mouse | Finger |
+| --- | --- | --- |
+| select | left click | tap |
+| order (battle) | right click on ground / enemy | tap ground / enemy with something selected |
+| draw a route (map) | left-drag | drag |
+| set a route (map) | click a destination | tap a destination |
+| box-select | left-drag on ground | drag on ground |
+| zoom | wheel | pinch |
+| pan | right- or middle-drag | two-finger drag |
+
+Touch is detected with `DisplayServer.is_touchscreen_available()`; append
+`?input=touch` or `?input=mouse` to the URL to force either model.
+
+**Drawing a route** samples the stroke every 22 world units and runs A\*
+between samples, so a finger dragged straight across the river still produces a
+legal route over the bridge. Pathing is `AStarGrid2D` over the terrain grid, with
+water and cliffs solid and cell weights set from terrain speed, so roads win
+without any snap-to-road rule.
+
+**Portrait battles** turn the 300×200 crop to 200×300 so the field fills the
+screen rather than sitting as a strip across the middle; blocks come out about
+twice the size. Everything outside the field is dimmed, and a Fit button undoes
+any pinch or pan.
+
+Verified in Chromium with a 390×844, 3× touch profile driving real touch events
+(including two-finger pinch and pan over CDP) and on a 1280×800 mouse profile.
+
 ## The multiplayer counter demo
 
 Still in the repo as `scenes/main.tscn` — point `run/main_scene` at it to run the

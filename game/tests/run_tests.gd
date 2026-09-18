@@ -14,6 +14,7 @@ var _checks := 0
 
 func _init() -> void:
 	_test_terrain_loads()
+	_test_pathing()
 	_test_flank_charge_routs()
 	_test_braced_front_charge_fails()
 	_test_hill_advantage()
@@ -56,6 +57,45 @@ func run_for(sim: BattleSim, seconds: float) -> void:
 		sim.step(DT)
 
 # ------------------------------------------------------------------- tests
+
+func _test_pathing() -> void:
+	print("\npathing")
+	var t := Terrain.new()
+	var c := Campaign.new(t)
+
+	# Grid points must sit on cell centres or paths drift half a cell.
+	check("A* grid points are cell centres",
+		c._grid.get_point_position(Vector2i(0, 0)).is_equal_approx(Vector2(10, 10)),
+		str(c._grid.get_point_position(Vector2i(0, 0))))
+
+	var path := c.find_path(Vector2(100, 400), Vector2(1100, 400))
+	check("a path across the map exists", path.size() > 0)
+	check("it ends exactly on the destination",
+		path.size() > 0 and path[path.size() - 1] == Vector2(1100, 400))
+	var crosses_bridge := false
+	var dry := true
+	for p in path:
+		if t.biome_at(p) == Terrain.Biome.BRIDGE:
+			crosses_bridge = true
+		if t.biome_at(p) == Terrain.Biome.WATER:
+			dry = false
+	check("path never enters water", dry)
+	check("crossing the river uses the bridge", crosses_bridge)
+
+	check("water is unreachable", c.find_path(Vector2(100, 400), Vector2(610, 100)).is_empty())
+
+	# Drawing a stroke straight through the river still yields a legal route.
+	var drawn := PackedVector2Array()
+	var from := Vector2(400, 300)
+	for x in [450, 500, 550, 600, 650, 700]:
+		drawn = c.extend_path(from, drawn, Vector2(x, 300))
+	var legal := drawn.size() > 0
+	for p in drawn:
+		if t.is_blocked(p, GameConfig.Role.INFANTRY):
+			legal = false
+	check("a hand-drawn stroke across the river becomes a legal path", legal, "%d points" % drawn.size())
+	check("the drawn path reaches the far bank",
+		drawn.size() > 0 and drawn[drawn.size() - 1] == Vector2(700, 300))
 
 func _test_terrain_loads() -> void:
 	print("\nterrain")

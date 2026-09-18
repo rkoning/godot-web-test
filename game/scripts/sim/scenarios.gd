@@ -155,10 +155,14 @@ static func _spot_is_free(sim: BattleSim, pos: Vector2) -> bool:
 	return true
 
 ## Build a battle from two armies that just met on the strategic map.
-static func start_battle(terrain: Terrain, player: Army, enemy: Army) -> BattleSim:
+##
+## `crop` overrides the configured field size; the shell passes a portrait
+## crop on a portrait phone so the field fills the screen instead of a strip.
+static func start_battle(terrain: Terrain, player: Army, enemy: Army, crop := Vector2.ZERO) -> BattleSim:
 	var sim := BattleSim.new()
 	var mid: Vector2 = (player.pos + enemy.pos) * 0.5
-	var crop: Vector2 = GameConfig.strategic["battle_crop"]
+	if crop == Vector2.ZERO:
+		crop = GameConfig.strategic["battle_crop"]
 	# The crop is the spec's 300x200 whenever the armies are in engagement range,
 	# and grows only if they somehow met further apart than that.
 	var span := Rect2(player.pos, Vector2.ZERO).expand(enemy.pos).grow(70.0)
