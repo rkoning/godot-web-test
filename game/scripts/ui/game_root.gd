@@ -36,7 +36,9 @@ var camera := MapCamera.new()
 var touch := false                # tap-to-order instead of right-click
 
 var selection: Array[Block] = []
+var hover_block: Block = null     # mouse only: what a click would pick
 var pending_order := ""           # "move" / "attack" armed by the order buttons
+var _ack := {}                    # {"pos": world, "at": seconds} of the last order given
 var hover_world := Vector2.ZERO
 var preview_path: PackedVector2Array = []
 
@@ -134,6 +136,7 @@ func _load_scenario(index: int) -> void:
 	mode = Mode.STRATEGIC
 	peek_map = false
 	selection.clear()
+	hover_block = null
 	preview_path = PackedVector2Array()
 	_cancel_pointer()
 	_hud["result"].visible = false
@@ -151,6 +154,7 @@ func _begin_battle(player: Army, enemy: Army) -> void:
 	mode = Mode.BATTLE
 	paused = false
 	selection.clear()
+	hover_block = null
 	_accum = 0.0
 	_cancel_pointer()
 	_refresh_hud()
@@ -291,61 +295,229 @@ func _draw_battle() -> void:
 			continue
 		_draw_block(b, z)
 
-	# Order lines for what is selected.
-	for b in selection:
-		if not b.alive():
-			continue
-		var target: Vector2 = Vector2.INF
-		if b.order == Block.OrderType.MOVE:
-			target = b.order_point
-		elif b.order == Block.OrderType.ATTACK:
-			var t := sim.block_by_id(b.target_id)
-			if t != null:
-				target = t.pos
-		if target != Vector2.INF:
-			draw_line(_w2s(b.pos), _w2s(target), ThemeColors.ACCENT * Color(1, 1, 1, 0.5), 1.0)
+	_draw_orders()
+	_draw_combat()
+	_draw_tags()
+	_draw_ack()
 
+## A block is drawn in its own frame: local +x is the way it faces, so the
+## long side (the front) runs along local y.
 func _draw_block(b: Block, z: float) -> void:
-	var s: Vector2 = b.size()
+	var d: float = b.depth()
+	var w: float = b.frontage()
+	var body_rect := Rect2(Vector2(-d * 0.5, -w * 0.5), Vector2(d, w))
 	var col := ThemeColors.side(b.side)
+	var engaged := sim.is_engaged(b)
+	var pulse: float = 0.5 + 0.5 * sin(sim.time * 12.0)
 	var routing_flash: bool = b.routing and fmod(sim.time, 0.4) < 0.2
 
 	draw_set_transform(_w2s(b.pos), b.facing, Vector2(z, z))
 
+	# Selection first, so the block sits on top of its ring.
+	if selection.has(b):
+		draw_rect(body_rect.grow(5.0), ThemeColors.ACCENT * Color(1, 1, 1, 0.35), false, 6.0)
+		draw_rect(body_rect.grow(3.0), ThemeColors.TEXT, false, 1.5)
+	elif b == hover_block:
+		draw_rect(body_rect.grow(3.0), ThemeColors.TEXT * Color(1, 1, 1, 0.6), false, 1.2)
+
 	var body := col.darkened(0.55)
 	if b.routing:
 		body = (ThemeColors.WARN if routing_flash else col).darkened(0.35)
-	draw_rect(Rect2(-s * 0.5, s), body, true)
+	draw_rect(body_rect, body, true)
 
-	# Health fills the block from the bottom up.
+	# Health fills the block along its front.
 	var hf: float = clampf(b.health / b.max_health, 0.0, 1.0)
-	draw_rect(
-		Rect2(Vector2(-s.x * 0.5, s.y * 0.5 - s.y * hf), Vector2(s.x, s.y * hf)),
-		col, true)
+	draw_rect(Rect2(body_rect.position, Vector2(d, w * hf)), col, true)
 
-	# Morale is the outline: a shaky block has a thin edge.
+	# Just took a hit: a flash that fades over a third of a second.
+	if b.hit_flash > 0.0:
+		draw_rect(body_rect, Color(1, 1, 1, 0.7 * b.hit_flash / 0.3), true)
+
+	# Morale is the outline: a shaky block has a thin edge. Fighting turns it hot.
 	var mf: float = clampf(b.morale / b.max_morale, 0.0, 1.0)
-	draw_rect(Rect2(-s * 0.5, s), col.lightened(0.35), false, 0.6 + 2.4 * mf)
+	var edge := col.lightened(0.35)
+	if engaged:
+		edge = ThemeColors.WARN.lerp(Color.WHITE, pulse * 0.5)
+	draw_rect(body_rect, edge, false, 0.6 + 2.4 * mf)
 
-	if b.braced:
-		draw_line(Vector2(s.x * 0.5, -s.y * 0.5), Vector2(s.x * 0.5, s.y * 0.5),
-			ThemeColors.ACCENT, 2.5)
-
-	# Facing notch on the front edge.
+	# The front edge is the long side: bright, and accent-coloured when braced.
+	var front_col := ThemeColors.ACCENT if b.braced else col.lightened(0.6)
+	draw_line(Vector2(d * 0.5, -w * 0.5), Vector2(d * 0.5, w * 0.5), front_col,
+		3.0 if b.braced else 1.8)
 	draw_colored_polygon(PackedVector2Array([
-		Vector2(s.x * 0.5, -2.0), Vector2(s.x * 0.5 + 4.0, 0.0), Vector2(s.x * 0.5, 2.0),
-	]), col.lightened(0.5))
+		Vector2(d * 0.5, -3.0), Vector2(d * 0.5 + 3.5, 0.0), Vector2(d * 0.5, 3.0),
+	]), front_col)
 
 	_draw_role_mark(b.stats()["mark"], col.lightened(0.6))
 
-	if selection.has(b):
-		draw_rect(Rect2(-s * 0.5 - Vector2(3, 3), s + Vector2(6, 6)),
-			ThemeColors.TEXT, false, 1.0)
 	if b.order == Block.OrderType.WITHDRAW:
-		draw_rect(Rect2(-s * 0.5 - Vector2(2, 2), s + Vector2(4, 4)),
-			ThemeColors.WARN, false, 1.0)
+		draw_rect(body_rect.grow(2.0), ThemeColors.WARN, false, 1.0)
 
 	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+## Where every one of the player's blocks is going or who it is after, not
+## just the selected ones: a move is a dashed accent line to a ring, an attack
+## is a red arrow to a bracketed target.
+func _draw_orders() -> void:
+	for b in sim.blocks:
+		if not b.alive() or b.side != GameConfig.Side.PLAYER or b.routing:
+			continue
+		var from := _w2s(b.pos)
+		if b.order == Block.OrderType.MOVE:
+			var to := _w2s(b.order_point)
+			var col := ThemeColors.ACCENT * Color(1, 1, 1, 0.85)
+			_draw_dashes(from, to, col, 2.0, 0.0)
+			draw_circle(to, 6.0, ThemeColors.ACCENT * Color(1, 1, 1, 0.25))
+			draw_arc(to, 6.0, 0.0, TAU, 20, col, 1.5)
+		elif b.order == Block.OrderType.ATTACK:
+			var t := sim.block_by_id(b.target_id)
+			if t == null or not t.alive() or not sim.visible_to(t, GameConfig.Side.PLAYER):
+				continue
+			var col := ThemeColors.ENEMY.lightened(0.25)
+			if not sim.is_engaged(b):
+				_draw_arrow(from, _w2s(t.pos), col, 2.0, 9.0)
+			_draw_brackets(_screen_bounds(t).grow(4.0 + 2.0 * (0.5 + 0.5 * sin(sim.time * 6.0))), col)
+
+## Where the fighting is: a spinning clash between every pair of engaged
+## blocks, and dashes streaming from archers to whoever they are shooting.
+func _draw_combat() -> void:
+	var seen := {}
+	for a in sim.blocks:
+		if not a.alive() or not sim.visible_to(a, GameConfig.Side.PLAYER):
+			continue
+		for b in sim.contacts_of(a):
+			if not b.alive() or not sim.visible_to(b, GameConfig.Side.PLAYER):
+				continue
+			var key := "%d-%d" % [mini(a.id, b.id), maxi(a.id, b.id)]
+			if seen.has(key):
+				continue
+			seen[key] = true
+			_draw_clash(_w2s((a.pos + b.pos) * 0.5))
+	for a in sim.blocks:
+		if not a.alive() or a.shooting_id < 0 or not sim.visible_to(a, GameConfig.Side.PLAYER):
+			continue
+		var t := sim.block_by_id(a.shooting_id)
+		if t == null or not t.alive():
+			continue
+		_draw_dashes(_w2s(a.pos), _w2s(t.pos), ThemeColors.side(a.side) * Color(1, 1, 1, 0.8),
+			1.5, sim.time * 2.5)
+
+func _draw_clash(c: Vector2) -> void:
+	var pulse: float = 0.5 + 0.5 * sin(sim.time * 12.0)
+	var r: float = 6.0 + 3.0 * pulse
+	for i in 4:
+		var dir := Vector2.RIGHT.rotated(sim.time * 4.0 + float(i) * PI / 4.0) * r
+		draw_line(c - dir, c + dir, ThemeColors.WARN, 2.0)
+	draw_circle(c, 2.5 + 1.5 * pulse, Color.WHITE)
+
+## A word over each of the player's blocks that is doing something, and over
+## an enemy that is running. Fighting is already shown by the clash between
+## the two blocks, so the tag goes on the player's side only. Tags that would
+## sit on top of each other stack upward instead.
+func _draw_tags() -> void:
+	var z := camera.zoom
+	var placed: Array[Rect2] = []
+	for b in sim.blocks:
+		if not b.alive() or not sim.visible_to(b, GameConfig.Side.PLAYER):
+			continue
+		var tag := _block_tag(b)
+		if tag == "":
+			continue
+		var col := ThemeColors.TEXT
+		if b.routing or sim.is_engaged(b):
+			col = ThemeColors.WARN
+		elif b.braced:
+			col = ThemeColors.ACCENT
+		var lift: float = maxf(b.frontage(), b.depth()) * 0.5 * z + 7.0
+		var p := _w2s(b.pos) + Vector2(0.0, -lift)
+		var tw: float = _font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		var box := Rect2(p.x - tw * 0.5 - 3.0, p.y - 11.0, tw + 6.0, 14.0)
+		var bumped := true
+		while bumped:
+			bumped = false
+			for other in placed:
+				if other.intersects(box):
+					box.position.y -= 15.0
+					bumped = true
+					break
+		placed.append(box)
+		draw_rect(box, Color(0, 0, 0, 0.6), true)
+		draw_string(_font, Vector2(box.position.x + 3.0, box.end.y - 3.0), tag,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+func _block_tag(b: Block) -> String:
+	if b.routing:
+		return "ROUTING"
+	if b.side != GameConfig.Side.PLAYER:
+		return ""
+	if sim.is_engaged(b):
+		return "FIGHTING"
+	if b.braced:
+		return "BRACED"
+	match b.order:
+		Block.OrderType.WITHDRAW: return "WITHDRAWING"
+		Block.OrderType.ATTACK: return "ATTACKING"
+		Block.OrderType.MOVE: return "MOVING"
+		Block.OrderType.HOLD: return "HOLDING"
+	return ""
+
+## A ring that ripples out from where the last order landed, so a tap is
+## visibly acknowledged even before the block starts moving.
+func _draw_ack() -> void:
+	if _ack.is_empty():
+		return
+	var age: float = _now() - _ack["at"]
+	if age > 0.5:
+		_ack = {}
+		return
+	var f := age / 0.5
+	draw_arc(_w2s(_ack["pos"]), 8.0 + 22.0 * f, 0.0, TAU, 24,
+		ThemeColors.TEXT * Color(1, 1, 1, 1.0 - f), 2.5)
+
+func _now() -> float:
+	return float(Time.get_ticks_msec()) / 1000.0
+
+func _screen_bounds(b: Block) -> Rect2:
+	var pts := b.corners()
+	var r := Rect2(_w2s(pts[0]), Vector2.ZERO)
+	for i in range(1, pts.size()):
+		r = r.expand(_w2s(pts[i]))
+	return r
+
+func _draw_dashes(from: Vector2, to: Vector2, col: Color, width: float, phase: float) -> void:
+	var length := from.distance_to(to)
+	if length < 1.0:
+		return
+	var dir := (to - from) / length
+	var period := 12.0
+	var offset: float = fmod(phase * period, period)
+	var s: float = offset - period
+	while s < length:
+		var a: float = clampf(s, 0.0, length)
+		var e: float = clampf(s + period * 0.5, 0.0, length)
+		if e > a:
+			draw_line(from + dir * a, from + dir * e, col, width)
+		s += period
+
+func _draw_arrow(from: Vector2, to: Vector2, col: Color, width: float, head: float) -> void:
+	if from.distance_to(to) < head:
+		return
+	var dir := (to - from).normalized()
+	var tip := to - dir * 6.0
+	draw_line(from, tip - dir * head * 0.5, col, width)
+	draw_colored_polygon(PackedVector2Array([
+		tip, tip - dir * head + dir.orthogonal() * head * 0.5,
+		tip - dir * head - dir.orthogonal() * head * 0.5,
+	]), col)
+
+## Four corner brackets: a target reticle around a rect.
+func _draw_brackets(r: Rect2, col: Color) -> void:
+	var arm: float = minf(8.0, minf(r.size.x, r.size.y) * 0.4)
+	for corner in [r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]:
+		var sx: float = 1.0 if corner.x == r.position.x else -1.0
+		var sy: float = 1.0 if corner.y == r.position.y else -1.0
+		draw_line(corner, corner + Vector2(arm * sx, 0.0), col, 2.0)
+		draw_line(corner, corner + Vector2(0.0, arm * sy), col, 2.0)
 
 ## Role marks are drawn rather than typed: the fallback font has no glyphs for
 ## swords or horses, and a missing glyph renders as an empty box.
@@ -476,9 +648,15 @@ func _pointer_move(screen: Vector2) -> void:
 	hover_world = _s2w(screen)
 
 	if _press_screen == Vector2.INF:
-		# Plain hover, mouse only: preview the route to the cursor.
-		if not _in_battle_control() and campaign.selected != null and not touch:
-			preview_path = campaign.find_path(campaign.selected.pos, hover_world)
+		# Plain hover, mouse only: preview the route to the cursor, or show
+		# what a click on the battlefield would pick.
+		if touch:
+			return
+		if not _in_battle_control():
+			if campaign.selected != null:
+				preview_path = campaign.find_path(campaign.selected.pos, hover_world)
+			return
+		_update_hover()
 		return
 
 	if not _press_moved and screen.distance_to(_press_screen) < DRAG_THRESHOLD_PX:
@@ -504,6 +682,21 @@ func _pointer_move(screen: Vector2) -> void:
 	if hover_world.distance_to(_stroke_tail) >= STROKE_SAMPLE_WORLD:
 		preview_path = campaign.extend_path(campaign.selected.pos, preview_path, hover_world)
 		_stroke_tail = hover_world
+
+## What is under the mouse, and a cursor that says what a click would do.
+func _update_hover() -> void:
+	hover_block = _block_at(hover_world, GameConfig.Side.PLAYER)
+	var shape := Control.CURSOR_ARROW
+	if hover_block != null and pending_order == "":
+		shape = Control.CURSOR_POINTING_HAND
+	elif not selection.is_empty():
+		var foe := _block_at(hover_world, GameConfig.Side.ENEMY)
+		if foe != null:
+			hover_block = foe
+			shape = Control.CURSOR_CROSS
+		elif pending_order != "":
+			shape = Control.CURSOR_CROSS
+	mouse_default_cursor_shape = shape
 
 func _pointer_up(screen: Vector2) -> void:
 	if _press_screen == Vector2.INF:
@@ -548,9 +741,10 @@ func _cancel_pointer() -> void:
 	if mode == Mode.STRATEGIC:
 		preview_path = PackedVector2Array()
 
-## A tap on the battlefield. With a finger there is no right button, so a tap
-## with something selected is the order: an enemy means attack, ground means
-## move. A mouse keeps the RTS convention and orders with the right button.
+## A tap on the battlefield. Your own block selects it. With something
+## selected, an enemy is attacked whichever pointer you use; open ground is a
+## move with a finger (there is no right button) and a deselect with a mouse,
+## which keeps the right-click RTS convention for orders.
 func _battle_tap(world: Vector2) -> void:
 	if pending_order != "":
 		_apply_pending(world)
@@ -558,12 +752,15 @@ func _battle_tap(world: Vector2) -> void:
 	var friend := _block_at(world, GameConfig.Side.PLAYER)
 	if friend != null:
 		selection = [friend] as Array[Block]
+		_refresh_hud()
 		return
-	if touch and not selection.is_empty():
-		_issue_at(world)
-		return
-	if not touch:
-		selection.clear()
+	if not selection.is_empty():
+		var foe := _block_at(world, GameConfig.Side.ENEMY)
+		if foe != null or touch:
+			_issue_at(world)
+			return
+	selection.clear()
+	_refresh_hud()
 
 ## Attack an enemy under the point, otherwise move there.
 func _issue_at(world: Vector2) -> void:
@@ -575,20 +772,27 @@ func _issue_at(world: Vector2) -> void:
 			sim.order_attack(b, foe)
 		else:
 			sim.order_move(b, world)
+	_acknowledge(foe.pos if foe != null else world)
 	pending_order = ""
 	_refresh_hud()
 
 func _apply_pending(world: Vector2) -> void:
 	if pending_order == "attack":
 		var foe := _block_at(world, GameConfig.Side.ENEMY)
-		if foe != null:
-			for b in selection:
-				sim.order_attack(b, foe)
+		if foe == null:
+			return                   # missed: stay armed so the next tap can land
+		for b in selection:
+			sim.order_attack(b, foe)
+		_acknowledge(foe.pos)
 	else:
 		for b in selection:
 			sim.order_move(b, world)
+		_acknowledge(world)
 	pending_order = ""
 	_refresh_hud()
+
+func _acknowledge(world: Vector2) -> void:
+	_ack = {"pos": world, "at": _now()}
 
 func _box_select(rect: Rect2) -> void:
 	var picked: Array[Block] = []
@@ -597,23 +801,30 @@ func _box_select(rect: Rect2) -> void:
 			picked.append(b)
 	selection = picked
 
-## Hit radius in world units: a fingertip needs about 28 px, a cursor 14.
+## Hit radius in world units for the strategic map's army markers: a
+## fingertip needs about 28 px, a cursor 14.
 func _hit_radius() -> float:
 	return (28.0 if touch else 14.0) / camera.zoom
 
+## How far outside a block's body a tap still counts, in world units.
+func _hit_pad() -> float:
+	return (24.0 if touch else 10.0) / camera.zoom
+
+## The block under a point: anywhere on its body counts, plus a pad around
+## it, and the nearest wins when the pads overlap.
 func _block_at(world: Vector2, side: int) -> Block:
 	if sim == null:
 		return null
 	var best: Block = null
 	var best_d := INF
-	var reach := _hit_radius()
+	var pad := _hit_pad()
 	for b in sim.blocks:
 		if not b.alive() or b.side != side:
 			continue
 		if side != GameConfig.Side.PLAYER and not sim.visible_to(b, GameConfig.Side.PLAYER):
 			continue
-		var d: float = b.pos.distance_to(world)
-		if d < maxf(b.size().x, reach) and d < best_d:
+		var d: float = b.distance_to_point(world)
+		if d <= pad and d < best_d:
 			best_d = d
 			best = b
 	return best
@@ -751,12 +962,18 @@ func _build_hud() -> void:
 	_hud["info"] = _label()
 	_hud["info"].autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud["info"].size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Always two lines tall: the map is fitted into what the HUD leaves, so a
+	# panel that grew with the selection would make the view jump on every tap.
+	_hud["info"].custom_minimum_size.y = 40.0
+	_hud["info"].max_lines_visible = 2
 	bottom_box.add_child(_hud["info"])
 
 	var orders := _flow()
 	bottom_box.add_child(orders)
-	orders.add_child(_button("Move", func(): pending_order = "move"; _refresh_hud()))
-	orders.add_child(_button("Attack", func(): pending_order = "attack"; _refresh_hud()))
+	_hud["move_btn"] = _order_button("Move", "move")
+	orders.add_child(_hud["move_btn"])
+	_hud["attack_btn"] = _order_button("Attack", "attack")
+	orders.add_child(_hud["attack_btn"])
 	orders.add_child(_button("Hold", func(): _for_selection(sim.order_hold)))
 	orders.add_child(_button("Withdraw", func(): _for_selection(sim.order_withdraw)))
 	orders.add_child(_button("Select all", _select_all))
@@ -778,6 +995,16 @@ func _build_hud() -> void:
 
 	_build_result_panel()
 	_build_tuning_panel()
+
+## Move and Attack arm the next tap. The button stays lit while it is armed,
+## and pressing it again disarms it.
+func _order_button(text: String, kind: String) -> Button:
+	var toggle := func() -> void:
+		pending_order = "" if pending_order == kind else kind
+		_refresh_hud()
+	var b := _button(text, toggle)
+	b.toggle_mode = true
+	return b
 
 func _for_selection(fn: Callable) -> void:
 	for b in selection:
@@ -889,6 +1116,12 @@ func _refresh_hud() -> void:
 	_hud["pause"].text = "Resume" if paused else "Pause"
 	_hud["speed"].text = "%d×" % int(speed)
 	_hud["peek"].text = "Battle" if peek_map else "Map"
+	_hud["move_btn"].set_pressed_no_signal(pending_order == "move")
+	_hud["attack_btn"].set_pressed_no_signal(pending_order == "attack")
+	if selection.is_empty():
+		pending_order = ""
+		_hud["move_btn"].set_pressed_no_signal(false)
+		_hud["attack_btn"].set_pressed_no_signal(false)
 
 func _layout_overlays() -> void:
 	# Panels that float over the map keep to the screen on a phone.
@@ -949,29 +1182,65 @@ func _terrain_tooltip() -> String:
 
 func _selection_tooltip() -> String:
 	var lines: PackedStringArray = []
+	var alive: Array[Block] = []
 	for b in selection:
-		if not b.alive():
-			continue
-		var state := "holding"
-		if b.routing:
-			state = "ROUTING"
-		elif b.order == Block.OrderType.WITHDRAW:
-			state = "withdrawing"
-		elif b.braced:
-			state = "braced"
-		elif b.order == Block.OrderType.ATTACK:
-			state = "attacking"
-		elif b.order == Block.OrderType.MOVE:
-			state = "moving"
+		if b.alive():
+			alive.append(b)
+	if alive.size() == 1:
+		var b := alive[0]
 		lines.append("%s  %d hp  %d morale · %s · %s" % [
-			b.stats()["name"], int(b.health), int(b.morale), state,
+			b.stats()["name"], int(b.health), int(b.morale), _block_state(b),
 			terrain.describe(b.pos)["name"],
 		])
-	if pending_order != "":
-		lines.append("Tap a %s target." % pending_order)
+	elif alive.size() > 1:
+		var fighting := 0
+		var shaken := 0
+		for b in alive:
+			if sim.is_engaged(b):
+				fighting += 1
+			if b.routing:
+				shaken += 1
+		var text := "%d blocks selected" % alive.size()
+		if fighting > 0:
+			text += " · %d fighting" % fighting
+		if shaken > 0:
+			text += " · %d routing" % shaken
+		lines.append(text)
+	if pending_order == "attack":
+		lines.append("ATTACK armed: tap an enemy block.")
+	elif pending_order == "move":
+		lines.append("MOVE armed: tap the ground to go there.")
 	elif touch:
 		lines.append("Tap an enemy to attack, tap ground to move.")
+	else:
+		lines.append("Click an enemy to attack, right-click ground to move.")
 	return "\n".join(lines)
+
+func _block_state(b: Block) -> String:
+	if b.routing:
+		return "ROUTING"
+	if sim.is_engaged(b):
+		var foes: PackedStringArray = []
+		var worst := "front"
+		for f in sim.contacts_of(b):
+			foes.append(f.stats()["name"].to_lower())
+			var arc: String = sim.arc_of(b, f.pos)
+			if arc == "rear" or (arc == "flank" and worst == "front"):
+				worst = arc
+		var text := "FIGHTING enemy %s" % ", ".join(foes)
+		if worst != "front":
+			text += " — hit in the %s!" % worst
+		return text
+	if b.order == Block.OrderType.WITHDRAW:
+		return "withdrawing"
+	if b.braced:
+		return "braced"
+	if b.order == Block.OrderType.ATTACK:
+		var t := sim.block_by_id(b.target_id)
+		return "attacking" if t == null else "attacking enemy %s" % t.stats()["name"].to_lower()
+	if b.order == Block.OrderType.MOVE:
+		return "moving"
+	return "holding"
 
 # -------------------------------------------------------------------- buttons
 

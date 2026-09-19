@@ -14,6 +14,7 @@ var _checks := 0
 
 func _init() -> void:
 	_test_terrain_loads()
+	_test_block_geometry()
 	_test_pathing()
 	_test_flank_charge_routs()
 	_test_braced_front_charge_fails()
@@ -116,6 +117,52 @@ func _test_terrain_loads() -> void:
 	check("river blocks movement",
 		water != Vector2.INF and t.is_blocked(water, GameConfig.Role.INFANTRY))
 
+## A block is a line of troops: the long side is the front, and it moves and
+## fights along its short axis.
+func _test_block_geometry() -> void:
+	print("\nblock geometry")
+	var b := Block.new(1, GameConfig.Side.PLAYER, GameConfig.Role.INFANTRY, Vector2.ZERO, 0.0, 1.0)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for c in b.corners():
+		lo = lo.min(c)
+		hi = hi.max(c)
+	var extent := hi - lo
+	check("the long side is the front, across the facing",
+		is_equal_approx(extent.y, b.frontage()) and is_equal_approx(extent.x, b.depth())
+		and b.frontage() > b.depth(), "extent %s" % extent)
+	check("the front edge lies ahead of the centre",
+		b.front_point().is_equal_approx(Vector2(b.depth() * 0.5, 0.0)))
+
+	check("a point on the body is at distance zero",
+		is_zero_approx(b.distance_to_point(Vector2(3.0, 9.0))))
+	check("distance grows past the front edge",
+		is_equal_approx(b.distance_to_point(Vector2(b.depth() * 0.5 + 5.0, 0.0)), 5.0))
+	check("distance grows past the end of the line",
+		is_equal_approx(b.distance_to_point(Vector2(0.0, b.frontage() * 0.5 + 5.0)), 5.0))
+
+	var sim := arena()
+	var a := sim.add_block(GameConfig.Side.PLAYER, GameConfig.Role.INFANTRY, Vector2(600, 400), 0.0)
+	var foe := sim.add_block(GameConfig.Side.ENEMY, GameConfig.Role.INFANTRY,
+		Vector2(600.0 + a.depth(), 400), PI)
+	check("two blocks face to face touch when their fronts meet", a.touches(foe))
+	foe.pos.x += 1.0
+	check("and not a step further apart", not a.touches(foe))
+
+	# What the view needs to show a fight: who is shooting whom, and hits.
+	var sim2 := arena()
+	var archer := sim2.add_block(GameConfig.Side.PLAYER, GameConfig.Role.ARCHERS, Vector2(600, 400), 0.0)
+	var target := sim2.add_block(GameConfig.Side.ENEMY, GameConfig.Role.INFANTRY, Vector2(680, 400), PI)
+	sim2.order_hold(target)
+	sim2.step(DT)
+	check("archers record whom they are shooting", archer.shooting_id == target.id)
+	check("a block that was hit flashes", target.hit_flash > 0.0)
+	check("engagement is readable from the sim", not sim2.is_engaged(archer)
+		and sim2.contacts_of(archer).is_empty())
+	target.pos.x = 1000.0
+	sim2.step(DT)
+	check("and the record clears when there is nothing in range", archer.shooting_id == -1)
+
 ## A cavalry flank charge on an engaged infantry block should rout it in ~5s.
 func _test_flank_charge_routs() -> void:
 	print("\nflank charge")
@@ -180,14 +227,18 @@ func _test_hill_advantage() -> void:
 	check("holding the hill leaves you healthier than the same fight on the flat",
 		uphill > flat + 5.0, "uphill %.1f vs flat %.1f" % [uphill, flat])
 
-## A spot on the hill where a block 26u downslope is meaningfully lower.
+## A spot on the hill where a block attacking from 26u downslope fights from
+## meaningfully lower ground. Blocks fight from their rear rank (see
+## BattleSim._ground_height), so it is the ground 6u behind the holder and 18u
+## in front of it — where the attacker's rear rank stands at contact — that
+## has to differ.
 func _find_slope(t: Terrain, hill: Dictionary) -> Vector2:
 	var bounds: Rect2 = hill["bounds"]
 	var y: float = hill["centroid"].y
 	var x: float = bounds.position.x
 	while x < bounds.end.x:
 		var here := Vector2(x, y)
-		if t.height_at(here) - t.height_at(here + Vector2(26, 0)) \
+		if t.height_at(here - Vector2(6, 0)) - t.height_at(here + Vector2(18, 0)) \
 				>= GameConfig.terrain_mods["hill_height_threshold"]:
 			return here
 		x += 5.0
@@ -200,7 +251,8 @@ func _find_flat(t: Terrain, near: Vector2) -> Vector2:
 		var p: Vector2 = near + Vector2(float(step) * 10.0, 0.0)
 		if not t.in_bounds(p + Vector2(40, 0)):
 			break
-		if t.height_at(p) == 0.0 and t.height_at(p + Vector2(26, 0)) == 0.0 \
+		if t.height_at(p - Vector2(6, 0)) == 0.0 and t.height_at(p) == 0.0 \
+				and t.height_at(p + Vector2(26, 0)) == 0.0 \
 				and not t.is_blocked(p, GameConfig.Role.INFANTRY):
 			return p
 	return Vector2.INF

@@ -4,6 +4,10 @@ extends RefCounted
 ## One unit on the battlefield: a rectangle with a role, a facing, health and
 ## morale. Pure data plus geometry — everything that changes a block is done by
 ## BattleSim, so the whole fight can run headless.
+##
+## A block is a line of troops, so its long side is the front: `size().x` is
+## the frontage (across the facing) and `size().y` is the depth (along it).
+## It moves and fights along the short axis, the way a formation does.
 
 enum OrderType { NONE, MOVE, ATTACK, HOLD, WITHDRAW }
 enum Status { ACTIVE, FLED, DESTROYED }
@@ -33,6 +37,8 @@ var charge_cooldown := 0.0
 var charge_run := 0.0                  # straight-line distance built up for a charge
 var last_move_dir := Vector2.ZERO
 var seen_ally_rout := false
+var shooting_id := -1                  # who the block loosed at this step, for the view
+var hit_flash := 0.0                   # seconds of "just took damage" left, for the view
 
 # Bookkeeping for the result screen.
 var withdrew := false
@@ -55,8 +61,15 @@ func _init(p_id: int, p_side: int, p_role: int, p_pos: Vector2, p_facing: float,
 func stats() -> Dictionary:
 	return GameConfig.unit(role)
 
+## (frontage, depth) in world units.
 func size() -> Vector2:
 	return stats()["size"]
+
+func frontage() -> float:
+	return size().x
+
+func depth() -> float:
+	return size().y
 
 func alive() -> bool:
 	return status == Status.ACTIVE and health > 0.0
@@ -66,15 +79,29 @@ func out_of_the_fight() -> bool:
 	return routing or order == OrderType.WITHDRAW
 
 func corners() -> PackedVector2Array:
-	var s := size() * 0.5
+	var half_depth := depth() * 0.5
+	var half_front := frontage() * 0.5
 	var f := Vector2.RIGHT.rotated(facing)
 	var r := Vector2(-f.y, f.x)
 	return PackedVector2Array([
-		pos + f * s.x + r * s.y,
-		pos + f * s.x - r * s.y,
-		pos - f * s.x - r * s.y,
-		pos - f * s.x + r * s.y,
+		pos + f * half_depth + r * half_front,
+		pos + f * half_depth - r * half_front,
+		pos - f * half_depth - r * half_front,
+		pos - f * half_depth + r * half_front,
 	])
+
+## Distance from a point to the block's edge, zero inside it. Picking uses
+## this rather than the distance to the centre so a block is hit anywhere on
+## its body, plus a finger's worth of padding around it.
+func distance_to_point(p: Vector2) -> float:
+	var local := (p - pos).rotated(-facing)
+	var dx := maxf(absf(local.x) - depth() * 0.5, 0.0)
+	var dy := maxf(absf(local.y) - frontage() * 0.5, 0.0)
+	return Vector2(dx, dy).length()
+
+## The middle of the front edge, where an attack on this block arrives.
+func front_point() -> Vector2:
+	return pos + Vector2.RIGHT.rotated(facing) * depth() * 0.5
 
 ## Separating-axis test between two oriented rectangles. Touching counts as
 ## overlapping, which is what "engaged" means in the spec.

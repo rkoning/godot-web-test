@@ -47,7 +47,10 @@ without a "snap to road" rule); End Turn moves armies along their paths. Two
 hostile armies within 60 units open a battle on a 300×200 crop of the same map.
 
 **Battle zoom** is real time, 90 seconds, four orders (Move / Attack / Hold /
-Withdraw) plus Retreat all. Facing decides everything: front ×1.0, flank ×1.5,
+Withdraw) plus Retreat all. A block is a line of troops: the long side is its
+front, and it moves and fights along the short axis. Two blocks in contact meet
+front to front, and the ground each fights from is the ground under its rear
+rank. Facing decides everything: front ×1.0, flank ×1.5,
 rear ×2.0 damage, with morale draining far faster from the sides and doubled
 again when a block is held at the front and hit from behind. Cavalry charges
 need a 30-unit run-up, are blunted to a quarter by braced infantry from the
@@ -114,13 +117,26 @@ the HUD rows wrap (`HFlowContainer`) instead of clipping.
 
 | | Mouse | Finger |
 | --- | --- | --- |
-| select | left click | tap |
-| order (battle) | right click on ground / enemy | tap ground / enemy with something selected |
+| select | left click anywhere on the block | tap anywhere on the block |
+| attack (battle) | click an enemy with something selected | tap an enemy with something selected |
+| move (battle) | right click on ground | tap ground with something selected |
+| arm an order | Move / Attack button, then click the target | same; the button stays lit while armed |
 | draw a route (map) | left-drag | drag |
 | set a route (map) | click a destination | tap a destination |
 | box-select | left-drag on ground | drag on ground |
 | zoom | wheel | pinch |
 | pan | right- or middle-drag | two-finger drag |
+
+Picking uses the distance to the block's body plus a pad (10 px for a mouse,
+24 px for a finger), so a block is hit anywhere on its rectangle rather than
+only near its centre. What every block is doing is drawn on the field: a
+dashed line to a move point, a red arrow and corner brackets on an attack
+target, a spinning clash where two blocks are engaged, streaming dashes from
+archers to whoever they are shooting, a white flash on a block that just took
+damage, and a tag (MOVING / ATTACKING / FIGHTING / BRACED / ROUTING) over
+it. The selection ring is a wide accent glow, the hover outline shows what a
+click would pick, and the cursor turns into a hand over your own blocks and a
+cross over a target.
 
 Touch is detected with `DisplayServer.is_touchscreen_available()`; append
 `?input=touch` or `?input=mouse` to the URL to force either model.

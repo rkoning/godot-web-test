@@ -64,6 +64,17 @@ func block_by_id(id: int) -> Block:
 			return b
 	return null
 
+## Hostile blocks `b` was touching at the end of the last step.
+func contacts_of(b: Block) -> Array:
+	return _prev_contacts.get(b.id, [])
+
+func is_engaged(b: Block) -> bool:
+	return not contacts_of(b).is_empty()
+
+## The arc an attacker at `from` hits `defender` in, bridge rule included.
+func arc_of(defender: Block, from: Vector2) -> String:
+	return _arc(defender, from)
+
 # --------------------------------------------------------------------- orders
 
 func order_move(b: Block, point: Vector2) -> void:
@@ -347,6 +358,7 @@ func _resolve_ranged(dt: float) -> void:
 	for a in blocks:
 		if not a.alive() or a.stats()["ranged_dps"] <= 0.0:
 			continue
+		a.shooting_id = -1
 		if a.routing or a.order == Block.OrderType.WITHDRAW:
 			continue
 		if not _prev_contacts.get(a.id, []).is_empty():
@@ -354,6 +366,7 @@ func _resolve_ranged(dt: float) -> void:
 		var target := _ranged_target(a)
 		if target == null:
 			continue
+		a.shooting_id = target.id
 		var dmg: float = a.stats()["ranged_dps"] * GameConfig.supply_multiplier(a.supply) * dt
 		_hurt(target, dmg)
 		target.morale -= dmg * GameConfig.combat["morale_per_health"]
@@ -413,6 +426,7 @@ func _resolve_status(contacts: Dictionary, dt: float) -> void:
 		if not b.alive():
 			continue
 		b.charge_cooldown = maxf(0.0, b.charge_cooldown - dt)
+		b.hit_flash = maxf(0.0, b.hit_flash - dt)
 
 		var engaged: bool = not contacts.get(b.id, []).is_empty()
 
@@ -486,19 +500,25 @@ func _arc_morale(b: Block, contacts: Dictionary) -> float:
 	return drain / float(attackers)
 
 func _uphill_dealt(attacker: Block, defender: Block) -> float:
-	if terrain.height_at(attacker.pos) - terrain.height_at(defender.pos) \
+	if _ground_height(attacker) - _ground_height(defender) \
 			>= GameConfig.terrain_mods["hill_height_threshold"]:
 		return GameConfig.terrain_mods["hill_damage_dealt"]
 	return 1.0
 
 func _uphill_taken(defender: Block, attacker: Block) -> float:
-	if terrain.height_at(defender.pos) - terrain.height_at(attacker.pos) \
+	if _ground_height(defender) - _ground_height(attacker) \
 			>= GameConfig.terrain_mods["hill_height_threshold"]:
 		return GameConfig.terrain_mods["hill_damage_taken"]
 	return 1.0
 
+## The height a block fights from: its rear rank. Two blocks in contact share
+## a front line, so the ground under their backs is what tells them apart.
+func _ground_height(b: Block) -> float:
+	return terrain.height_at(b.pos - Vector2.RIGHT.rotated(b.facing) * b.depth() * 0.5)
+
 func _hurt(b: Block, amount: float) -> void:
 	b.health -= amount
+	b.hit_flash = 0.3
 	_damage_taken[b.id] = _damage_taken.get(b.id, 0.0) + amount
 
 # ----------------------------------------------------------------------- end
