@@ -12,7 +12,7 @@ parked your army on *is* your deployment when the fighting starts.
 
 ```
 game/
-  export_presets.cfg           the "Web" preset — tracked on purpose, CI needs it
+  export_presets.cfg           "Web" and "Windows Desktop" presets — tracked, CI needs them
   scenes/game.tscn             main scene; the HUD is built in code
   scripts/sim/                 all rules, no rendering, runs headless
     game_config.gd             every tunable number
@@ -26,6 +26,7 @@ game/
   scripts/net_*.gd             the earlier multiplayer counter demo (scenes/main.tscn)
   tests/run_tests.gd           acceptance checks, run headless in CI
 server/                        Cloudflare Worker: one Durable Object = one room
+tools/build-windows.ps1        local Windows build: import + export to build/windows/
 .github/actions/godot-export/  composite action: install Godot, import, export, verify
 .github/actions/publish-pages/ pages.sh: publish or remove one directory of the site
 .github/workflows/ci.yml       tests + export + Worker config check on push/PR
@@ -303,3 +304,38 @@ share a counter.
 
 A deployed build can be pointed at another server without rebuilding:
 `https://…/?server=ws://127.0.0.1:8787/ws`.
+
+### Windows build
+
+The "Windows Desktop" preset exports one x86_64 exe with the pack embedded,
+no code signing and no resource editing, so it needs nothing beyond the
+editor and its export templates. Get both once:
+
+1. Godot 4.5-stable editor for Windows from https://godotengine.org/download/windows/
+   (the standard build, not .NET), unzipped anywhere.
+2. Export templates: in the editor, Editor → Manage Export Templates →
+   Download and Install. (Or unzip `Godot_v4.5-stable_export_templates.tpz`
+   into `%APPDATA%\Godot\export_templates\4.5.stable\`.)
+
+Then, from a clone of this repo:
+
+```powershell
+git clone https://github.com/rkoning/godot-web-test.git
+cd godot-web-test
+git checkout claude/godot-web-game-cicd-vbk2rt     # until PR #2 is merged
+
+.\tools\build-windows.ps1 -Godot "C:\path\to\Godot_v4.5-stable_win64.exe" -Run
+```
+
+`-Godot` can be left out when `godot.exe` is on `PATH` or `$env:GODOT` is
+set. `-Debug` exports the debug template with a console window that shows
+script errors; `-Run` launches the exe after the build. Double-clicking
+`tools\build-windows.bat` does the same with the defaults. The output is
+`build\windows\CombatPrototype.exe`, which is git-ignored.
+
+The same preset exports from the command line on any OS, given the Windows
+templates: `godot --headless --path game --export-release "Windows Desktop"
+build/windows/CombatPrototype.exe` (the output directory must already exist).
+
+There is no CI job for it: the browser build is the deliverable, and the
+Windows exe is for running the prototype locally without a web server.
