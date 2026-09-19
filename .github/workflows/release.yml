@@ -27,15 +27,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Point the client at the deployed server
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER_URL}" ]; then
+            echo "::warning::SERVER_URL is unset; shipping the local-dev endpoint, so multiplayer will not connect."
+            exit 0
+          fi
+          sed -i "s#^const DEFAULT_SERVER_URL := .*#const DEFAULT_SERVER_URL := \"${SERVER_URL}\"#" \
+            game/scripts/net_config.gd
+          grep -n "DEFAULT_SERVER_URL :=" game/scripts/net_config.gd
+
       - uses: ./.github/actions/godot-export
         with:
           godot-version: ${{ env.GODOT_VERSION }}
           godot-release: ${{ env.GODOT_RELEASE }}
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: build
+      - name: Acceptance tests
+        working-directory: game
+        run: godot --headless --script tests/run_tests.gd
+
+      - name: Publish to the site root
+        if: github.event_name == 'release' || inputs.deploy
+        env:
+          REF: ${{ github.event.release.tag_name || github.sha }}
+        run: |
+          .github/actions/publish-pages/pages.sh publish build "" \
+            "Release build ${REF}"
 
       - name: Attach zipped build to the release
         if: github.event_name == 'release'
@@ -47,17 +67,25 @@ jobs:
           zip -r "web-${TAG}.zip" build
           gh release upload "$TAG" "web-${TAG}.zip" --clobber
 
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: build
-    if: github.event_name == 'release' || inputs.deploy
+  deploy-server:
+    name: Deploy Worker to Cloudflare
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+        working-directory: server
+
+      # Independent of the Pages jobs on purpose: a Cloudflare misconfiguration
+      # fails loudly here without holding back the client deploy.
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server

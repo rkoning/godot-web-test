@@ -6,9 +6,9 @@ config_version=5
 
 [application]
 
-config/name="Logistics Roguelike"
+config/name="Logistics Roguelike — Combat Prototype"
 config/description="Web build target for the logistics roguelike prototype."
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/game.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 config/icon="res://icon.svg"
 
@@ -16,7 +16,7 @@ config/icon="res://icon.svg"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-window/stretch/mode="canvas_items"
+window/stretch/mode="disabled"
 window/stretch/aspect="expand"
 
 [rendering]
