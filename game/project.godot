@@ -8,7 +8,7 @@ config_version=5
 
 config/name="Logistics Roguelike — Combat Prototype"
 config/description="Web build target for the logistics roguelike prototype."
-run/main_scene="res://scenes/game.tscn"
+run/main_scene="res://scenes/boot.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 config/icon="res://icon.svg"
 

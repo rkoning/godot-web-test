@@ -27,9 +27,17 @@ jobs:
 
       # The battle sim runs without a renderer, so the acceptance criteria are
       # checked here rather than by eye.
+      # A suite that starts, asserts a few things and then hits a runtime error
+      # prints SCRIPT ERROR, returns to the discovery loop and leaves
+      # `failures == 0` — a green build that tested half of what it claimed.
+      # The runner cannot see that from inside, so the log is the guard.
       - name: Acceptance tests
         working-directory: game
-        run: godot --headless --script tests/run_tests.gd
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          godot --headless --script tests/run_tests.gd 2>&1 | tee test.log
+          ! grep -q "SCRIPT ERROR" test.log
 
       - name: Upload build for inspection
         uses: actions/upload-artifact@v4

@@ -8,12 +8,22 @@ The playable piece is the **combat prototype**: one terrain dataset rendered at 
 turn-based strategic zoom and a real-time battle zoom, where the ground you
 parked your army on *is* your deployment when the fighting starts.
 
+The build opens on a menu (`scenes/boot.tscn`) with the combat prototype and the
+**campaign shell** — the 12-region logistics map, its End Turn pipeline, and a
+stack of composable `MapLayer`s that each system draws itself through. On the
+web, `?scene=combat` or `?scene=campaign` skips the menu.
+
 ## Layout
 
 ```
 game/
   export_presets.cfg           "Web" and "Windows Desktop" presets — tracked, CI needs them
-  scenes/game.tscn             main scene; the HUD is built in code
+  scenes/boot.tscn             main scene: the menu that picks one of the two below
+  scenes/game.tscn             the combat prototype; its HUD is built in code
+  scenes/campaign.tscn         the campaign shell; its HUD is built in code
+  scripts/boot.gd              the menu, and ?scene=combat|campaign on the web
+  data/prototype_map.gd        the 12-region logistics map, as data — including the
+                               starting armies, so a scenario is a map edit
   scripts/sim/                 all rules, no rendering, runs headless
     game_config.gd             every tunable number
     terrain.gd                 the one map: two character grids, derived features
@@ -22,9 +32,27 @@ game/
     battle_ai.gd               attacker / defender behaviours
     campaign.gd                strategic zoom: A* paths, turns, engagement
     scenarios.gd               the three set-pieces and deployment
-  scripts/ui/game_root.gd      rendering, input, HUD, tuning panel
+    world/                     the campaign model: world.gd, world_graph.gd, site.gd,
+                               edge.gd, region.gd, nation.gd, stack.gd, yields.gd,
+                               turn_resolver.gd, world_setup.gd
+                               turn_resolver.gd holds the fixed twelve-phase End Turn
+                               pipeline; world_setup.gd is its run-start mirror, the
+                               hooks World.from_map calls once on a new world
+    phases/                    one file per End Turn phase, one owner each
+  scripts/ui/game_root.gd      combat prototype: rendering, input, HUD, tuning panel
+  scripts/ui/campaign_root.gd  campaign shell: seeded world, HUD, layer registry,
+                               side-panel column, set_overlay for the battle view
+  scripts/ui/map_view.gd       the campaign map: camera, picking, input, layer stack
+  scripts/ui/map_layer.gd      the frozen layer seam: draw / tooltip / pressed /
+                               buttons / order / panel
+  scripts/ui/layers/           one MapLayer per system: graph_layer.gd, stacks_layer.gd
+  scripts/ui/map_camera.gd     pan and zoom, shared by both shells
   scripts/net_*.gd             the earlier multiplayer counter demo (scenes/main.tscn)
-  tests/run_tests.gd           acceptance checks, run headless in CI
+  tests/run_tests.gd           discovers tests/test_*.gd; "-- <suite>" runs just one
+  tests/harness.gd             the shared check / near / arena / world helpers
+  tests/test_combat.gd         the battle and strategic-zoom acceptance checks
+  tests/test_world.gd          the campaign world model
+  tests/test_campaign_shell.gd the campaign scene builds, seeds, and ends a turn
 server/                        Cloudflare Worker: one Durable Object = one room
 tools/build-windows.ps1        local Windows build: import + export to build/windows/
 .github/actions/godot-export/  composite action: install Godot, import, export, verify
@@ -73,20 +101,32 @@ states, and they are the difference between a chokepoint and a car park:
 ### Running the acceptance checks
 
 ```sh
-cd game && godot --headless --script tests/run_tests.gd
+cd game && godot --headless --script tests/run_tests.gd             # every suite
+cd game && godot --headless --script tests/run_tests.gd -- world    # only test_world.gd
 ```
 
-68 checks, gated in CI. They assert the behaviours the prototype exists to
-prove — a flank charge routing an engaged block inside 5s, the same charge
-failing into a brace, an uncovered withdrawal dying where a screened one lives,
-every battle ending inside the clock — and they measure the headline claim
-rather than asserting it vaguely:
+Three suites, gated in CI, and the run prints its own total. The **combat
+suite's 87 checks** are the stable number to preserve: they assert the
+behaviours the prototype exists to prove — a flank charge routing an engaged
+block inside 5s, the same charge failing into a brace, an uncovered withdrawal
+dying where a screened one lives, every battle ending inside the clock — and
+they measure the headline claim rather than asserting it vaguely:
 
 | Fight | On the good ground | In the open |
 | --- | --- | --- |
 | The Hill, garrison holds | trade **+40 hp** | −3 hp |
 | The Ford, garrison holds | trade **+69 hp** | −37 hp |
 | The Ford, played properly | 48s, enemy down to **1 of 6** | 14s, enemy loses **nothing** |
+
+The two campaign suites grow as the workstreams land, so their counts are not
+quoted here. `test_world.gd` covers the site graph, map validation, the
+prototype map's well-formedness (one river crossing, and every nation's depot
+still reaching one of its own farms after losing any single site other than the
+ford), stacks, relations,
+presence, the twelve-phase pipeline and the era boundaries; `test_campaign_shell.gd`
+is a smoke test that the campaign scene builds headlessly, seeds itself from map
+data, stacks its layers by `order()`, picks, hovers, and ends a turn through
+`TurnResolver`.
 
 ### One known balance gap
 

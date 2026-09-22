@@ -104,3 +104,24 @@ static func supply_multiplier(supply: float) -> float:
 
 static func unit(role: int) -> Dictionary:
 	return units[role]
+
+## Run structure. Three eras; the crisis occupies the last third of each.
+static var run := {
+	"turns_per_era": 24,
+	"eras": 3,
+}
+
+## Base per-turn yields and capacities per site kind (Appendix B table).
+## WS-F multiplies by posture/culture/unrest; WS-A reads capacities.
+static var sites := {
+	"farm_supply": 6.0,
+	"farm_forage_regiments": 3,
+	"village_levy_every_turns": 2,
+	"village_forage_regiments": 1,
+	"mine_coin": 4.0,
+	"market_coin": 3.0,
+	"market_forage_regiments": 2,
+	"market_trade_multiplier": 1.5,
+	"node_coin": 2.0,
+	"depot_max_stock": 120.0,
+}

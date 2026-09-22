@@ -19,4 +19,8 @@ mono_crash.*.json
 # Local web export output (CI produces this fresh on every run)
 /build/
 
+# The acceptance-test log CI greps for SCRIPT ERROR, and that a local run leaves
+# behind when you reproduce the CI step by hand.
+/game/test.log
+
 # NOTE: export_presets.cfg is intentionally tracked - CI cannot export without it.
