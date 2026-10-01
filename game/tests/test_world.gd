@@ -340,7 +340,8 @@ func _test_map_stacks_and_setup_hooks() -> void:
 	# The run-start seam. `hooks()` is process-global mutable state shared by
 	# every suite, so first name the leak if some earlier suite left one behind
 	# — otherwise this test's counts would be wrong for a reason nothing says.
-	t.check("no suite leaked a WorldSetup hook", WorldSetup.hooks().is_empty(),
+	t.check("only WS-A's LogisticsSetup hook is registered", WorldSetup.hooks().size() == 1
+			and WorldSetup.hooks()[0].get_method() == "run",
 		"%d hook(s) still registered" % WorldSetup.hooks().size())
 	# Then append one, build a world, and erase it again.
 	var calls: Array = []
@@ -356,8 +357,8 @@ func _test_map_stacks_and_setup_hooks() -> void:
 	t.check("a hook can register an era listener", hooked.era_listeners.size() == 1,
 		str(hooked.era_listeners.size()))
 	t.check("the test's hook is gone again", not WorldSetup.hooks().has(hook))
-	t.check("and the registry is empty for the next suite", WorldSetup.hooks().is_empty(),
-		"%d hook(s) still registered" % WorldSetup.hooks().size())
+	t.check("and the registry is back to just LogisticsSetup.run for the next suite",
+		WorldSetup.hooks().size() == 1, "%d hook(s) still registered" % WorldSetup.hooks().size())
 
 func _test_presence_severs() -> void:
 	var w := t.bare_world()

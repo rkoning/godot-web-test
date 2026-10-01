@@ -11,7 +11,9 @@ parked your army on *is* your deployment when the fighting starts.
 The build opens on a menu (`scenes/boot.tscn`) with the combat prototype and the
 **campaign shell** — the 12-region logistics map, its End Turn pipeline, and a
 stack of composable `MapLayer`s that each system draws itself through. On the
-web, `?scene=combat` or `?scene=campaign` skips the menu.
+web, `?scene=combat` or `?scene=campaign` skips the menu. The campaign's rules
+so far are its supply network — see [Logistics](#logistics), and the HUD's
+dropdown for the two set-pieces that teach it.
 
 ## Layout
 
@@ -38,14 +40,29 @@ game/
                                turn_resolver.gd holds the fixed twelve-phase End Turn
                                pipeline; world_setup.gd is its run-start mirror, the
                                hooks World.from_map calls once on a new world
-    phases/                    one file per End Turn phase, one owner each
-  scripts/ui/game_root.gd      combat prototype: rendering, input, HUD, tuning panel
+    phases/                    one file per End Turn phase, one owner each —
+                               supply_phase.gd, movement_phase.gd and
+                               occupation_phase.gd are real since WS-A
+    logistics/                 the supply network: supply_rules.gd (Appendix B's
+                               arithmetic, pure), pathing.gd (Dijkstra in move
+                               points / hops / supply loss), orders.gd (the only
+                               writer of Stack.path and order), movement.gd,
+                               holdings.gd (who holds a site), scripted_enemy.gd,
+                               logistics_setup.gd, logistics_scenarios.gd
+    battle/                    the battle bridge: battle_bridge.gd (stack → army,
+                               result → regiments and retreat), auto_resolve.gd
+                               (the ratio, threshold auto-resolve, the AI stub)
+  scripts/ui/game_root.gd      combat prototype: strategic zoom, HUD, tuning; hosts a BattleView
+  scripts/ui/battle_view.gd    the battle screen as a component: both shells host it
   scripts/ui/campaign_root.gd  campaign shell: seeded world, HUD, layer registry,
+                               the SCENARIOS registry and its picker,
                                side-panel column, set_overlay for the battle view
   scripts/ui/map_view.gd       the campaign map: camera, picking, input, layer stack
   scripts/ui/map_layer.gd      the frozen layer seam: draw / tooltip / pressed /
                                buttons / order / panel
-  scripts/ui/layers/           one MapLayer per system: graph_layer.gd, stacks_layer.gd
+  scripts/ui/layers/           one MapLayer per system: graph_layer.gd,
+                               supply_layer.gd (trends, hops, the selected army's
+                               supply road), stacks_layer.gd, battle_layer.gd
   scripts/ui/map_camera.gd     pan and zoom, shared by both shells
   scripts/net_*.gd             the earlier multiplayer counter demo (scenes/main.tscn)
   tests/run_tests.gd           discovers tests/test_*.gd; "-- <suite>" runs just one
@@ -53,8 +70,14 @@ game/
   tests/test_combat.gd         the battle and strategic-zoom acceptance checks
   tests/test_world.gd          the campaign world model
   tests/test_campaign_shell.gd the campaign scene builds, seeds, and ends a turn
+  tests/test_supply.gd         the supply arithmetic and the phases that apply it
+  tests/test_movement.gd       pathing, orders, marching, merging, the scripted enemies
+  tests/test_logistics_shell.gd the logistics map layers and the scenario picker
+  tests/test_battle_bridge.gd  engagement, the bridge, results, auto-resolve, East Hill
+  tests/test_battle_shell.gd   BattleView, the prototype on it, the campaign battle flow
 server/                        Cloudflare Worker: one Durable Object = one room
 tools/build-windows.ps1        local Windows build: import + export to build/windows/
+tools/play-desktop.ps1         play locally in a desktop window, no export (.bat to double-click)
 .github/actions/godot-export/  composite action: install Godot, import, export, verify
 .github/actions/publish-pages/ pages.sh: publish or remove one directory of the site
 .github/workflows/ci.yml       tests + export + Worker config check on push/PR
@@ -75,8 +98,8 @@ before committing; click to path (A* weighted by terrain speed, so roads win
 without a "snap to road" rule); End Turn moves armies along their paths. Two
 hostile armies within 60 units open a battle on a 300×200 crop of the same map.
 
-**Battle zoom** is real time, 90 seconds, four orders (Move / Attack / Hold /
-Withdraw) plus Retreat all. A block is a line of troops: the long side is its
+**Battle zoom** is real time, 90 seconds, Hold / Withdraw plus drawn routes
+and lines plus Retreat all. A block is a line of troops: the long side is its
 front, and it moves and fights along the short axis. Two blocks in contact meet
 front to front, and the ground each fights from is the ground under its rear
 rank. Facing decides everything: front ×1.0, flank ×1.5,
@@ -98,6 +121,33 @@ states, and they are the difference between a chokepoint and a car park:
 - **"One block wide" is enforced, not hoped for.** A bridge cell holds one
   block. Blocks still queue *along* the bridge, one behind the other.
 
+**Contact.** Blocks that touch lock together. The attacker is pulled flush
+against the face it struck — front to front, both square up; on a flank or the
+rear only the attacker turns, so the hit stays a flank hit. The side dealing
+more damage through the contact pushes the other back, slowly (up to 6 u/s),
+and a loser with a river, a cliff or a friend behind it cannot give ground — a
+loser only gives ground when every block winning against it can follow, or the
+fight grinds in place. Only a block that is winning can walk out with a Move
+(cavalry backing out of a charge does this; `push_smoothing` also sets how
+long that hit-and-run window lasts); anyone else leaves by Withdraw, by
+routing, or not at all. Blocks turn at a rate (infantry 90°/s) and pivot
+before they walk; standing, holding, fighting, attacking and withdrawing
+blocks are solid to friends too, but a block on a Move (a drawn route, a
+right-click or tap move) passes through them at 0.6× speed and steps to the
+nearest free spot if it arrives on top of one. It never stacks onto a fight,
+though: it will not walk into a friend that is in contact with the enemy, nor
+reach an enemy from inside a friend. It waits behind the friend (it only goes
+round if its route does) and takes over when the friend falls. If two marchers
+arrive stacked, one takes the fight and the other backs out. Ordering a
+flanked block to
+attack its flanker starts a **reform**: about two seconds disordered at half
+damage, still taking the flank hit, before it faces the new enemy — and
+whoever was in front is then on its flank. A reform is cancelled if its target
+dies, routs, withdraws or leaves contact, or by the reformer's own Withdraw /
+Retreat all / rout. The battle AI keeps attacking whatever is touching its
+front and only turns on a flanker once nothing is, so it doesn't reform back
+and forth.
+
 ### Running the acceptance checks
 
 ```sh
@@ -105,20 +155,18 @@ cd game && godot --headless --script tests/run_tests.gd             # every suit
 cd game && godot --headless --script tests/run_tests.gd -- world    # only test_world.gd
 ```
 
-Three suites, gated in CI, and the run prints its own total. The **combat
+Every suite is gated in CI, and the run prints its own total. The **combat
 suite's 87 checks** are the stable number to preserve: they assert the
 behaviours the prototype exists to prove — a flank charge routing an engaged
 block inside 5s, the same charge failing into a brace, an uncovered withdrawal
 dying where a screened one lives, every battle ending inside the clock — and
-they measure the headline claim rather than asserting it vaguely:
+the headline claim is checked as a comparison, never as an exact result: the
+same fight goes better on the hill than on the flat, and better at the ford
+than in the open. The suite prints the measured trades and block counts for
+reading, but no test pins how a battle ends or how long it takes — those move
+with every tuning change.
 
-| Fight | On the good ground | In the open |
-| --- | --- | --- |
-| The Hill, garrison holds | trade **+40 hp** | −3 hp |
-| The Ford, garrison holds | trade **+69 hp** | −37 hp |
-| The Ford, played properly | 48s, enemy down to **1 of 6** | 14s, enemy loses **nothing** |
-
-The two campaign suites grow as the workstreams land, so their counts are not
+The campaign suites grow as the workstreams land, so their counts are not
 quoted here. `test_world.gd` covers the site graph, map validation, the
 prototype map's well-formedness (one river crossing, and every nation's depot
 still reaching one of its own farms after losing any single site other than the
@@ -128,19 +176,107 @@ is a smoke test that the campaign scene builds headlessly, seeds itself from map
 data, stacks its layers by `order()`, picks, hovers, and ends a turn through
 `TurnResolver`.
 
-### One known balance gap
+### The Ford's balance
 
 The Ford's brief says it "should be winnable by bracing on the bridge and using
-cavalry on whatever crosses". At the spec's stat table it is a **near miss**: the
-best line I could play destroys five of the six attackers and still loses the
-last block, because a defender at a one-wide chokepoint trades about 1 : 1.2 and
-four blocks cannot outlast six.
+cavalry on whatever crosses". Whether that line wins or narrowly loses depends
+on the tuning (march speed, push values, archer dps); `test_combat.gd` prints
+the result of playing it, and only checks that the crossing does better than
+the same fight in the open.
 
-Measured fix, if you want it to be a win: raise **archer ranged dps from 5 to 7**
-in the tuning panel (it wins at 7, 9 and 11). Infantry melee dps 8 → 10 also
-flips it but is not monotonic, so archers are the cleaner knob. The shipped
-numbers are the spec's, and a test records the near miss so changing the table
-does not silently move it.
+## Logistics
+
+The campaign shell's rules are about **feeding armies**, not fighting with them.
+Every number lives in `GameConfig.logistics` and every one of them is in the
+tuning panel.
+
+**Upkeep is superlinear.** A regiment eats 2 supply a turn; above 8 regiments
+the whole stack's bill is ×1.5, above 12 it is ×2. Twelve regiments in one
+column eat 36, the same twelve split into four eat 24 — so a big stack is a
+liability the moment it leaves its road, and splitting is the answer rather
+than a concession.
+
+**Food travels in hops, from a depot with stock.** What the ground under an
+army feeds (a farm feeds three regiments, a village one, a feature nobody) is
+free; the rest is requested from the nearest depot `Pathing` can reach, and
+loses 10% per road hop, 5% per river, 20% per trail, 35% per mountain. Three
+road hops deliver 73%. Depots hold stock rather than conjuring food: they open
+the run with 60, refill each turn from friendly farms within three hops, and
+cap at their capacity. A new depot costs 40 coin, takes two turns to build, and
+only one per region is allowed.
+
+**Presence severs.** A hostile stack standing on an interior site is a wall:
+routes — supply routes and march orders alike — cannot pass through it, though
+they may end on it, which is how an attack is ordered. One raider parked on the
+road behind an army can therefore cut its whole delivery without a fight, which
+is the game's central trick.
+
+**Hunger costs regiments.** A fed stack's level rises 10 a turn; a short one
+falls by 5 × (shortfall ÷ regiments). Crossing 50 is logged once; under 30 a
+stack loses a regiment every second turn, and a stack that loses its last one is
+gone. Under 10 supply it also moves at half speed.
+
+**Foraging pillages.** An army on hostile ground eats off it and wrecks it: a
+farm's yield dies for two turns, a village pays 2 coin and is spoiled for four,
+a market pays 10 and is spoiled for three. Your own ground is never pillaged.
+
+**Ground is taken by standing on it.** A stack given **Hold** with no route
+garrisons its site, which overrides the region's owner for supply purposes; hold
+a majority of a region's sites and the region itself flips. Marching through
+takes nothing.
+
+### Reading the map
+
+Each army's disc carries `N rgt · M%` — its size and its supply level. Left of
+that, the supply layer draws a **green up or red down arrow** for the direction
+its level is moving this turn, and the **hop count** of the route feeding it.
+Select an army and a dotted line runs from it back to the depot it is drawing
+from; no line means no depot is in reach. Hovering an army gives the whole
+ledger in one line — level and delta, upkeep, what the land gave, what the depot
+delivered and from how many hops away, and the shortfall if there is one — plus
+a line naming the site it is pillaging. Hovering a depot reports its stock, and
+says how many turns until it is ready if one is being built.
+
+### The two set-pieces
+
+The HUD's dropdown switches between the open campaign and two scenarios built
+from the same map data:
+
+- **The March** — take River East with a single 12-stack and hold it ten turns
+  without any stack falling under 50 supply. One column cannot eat there that
+  long; splitting to forage and garrison is the lesson.
+- **The Siege** — a scripted 14-stack sits on your frontier depot. Fighting it
+  loses. Cut its road home with a raider, let it starve and split, then take the
+  pieces.
+
+Scenarios are a registry, not a branch in the shell: `CampaignRoot.SCENARIOS`
+holds one preload per workstream, each exposing `all()`, `world()` and
+`status()`, and the picker lists them in order. `status()` reads progress back
+out of the world's own state and log every call, so the HUD line and a headless
+test ask the same question.
+
+## Battles on the campaign map
+
+When a march ends on an enemy — or two enemies are still sharing a site from
+last turn — End Turn turns it into a battle, one per site per turn:
+
+- **Your fights are played.** The site gets a ⚔ marker with the strength
+  ratio; **Fight battle** (or a tap on the marker) opens the real-time battle
+  over the map, on a crop of the same ground, with the defender on the site and
+  the attacker arriving along the edge it marched in on. A stack fields at most
+  8 blocks, one of each role in turn, and the rest wait in reserve. Not ready?
+  End the turn and it is offered again — or march away, which is a retreat.
+- **Trivial fights are not.** When your stack's effective strength (size ×
+  quality × supply) is at least **3×** the enemy's, the fight resolves in your
+  favour for 10% attrition, 5 supply and the rest of the move, and the log says
+  so with the ratio. About one time in twenty it goes wrong anyway.
+- **AI fights** use the same stub: the winner is rolled on strength.
+
+Afterwards, a destroyed block costs a regiment of its role; a block that fled,
+routed or withdrew lives. Whoever holds the field wins (nobody: the defender).
+The loser falls back one hop — an attacker the way it came, a defender toward
+its depot — for 10 supply; a loser with every way out held by the enemy is
+lost. Every number is in `GameConfig.battle_bridge` and the tuning panel.
 
 ## Playing on a phone
 
@@ -159,14 +295,28 @@ the HUD rows wrap (`HFlowContainer`) instead of clipping.
 | | Mouse | Finger |
 | --- | --- | --- |
 | select | left click anywhere on the block | tap anywhere on the block |
-| attack (battle) | click an enemy with something selected | tap an enemy with something selected |
+| draw a route (battle) | drag from your block | drag from your block |
+| attack at the end of a route | end the drag on an enemy (archers shoot it from there) | end the drag on an enemy (archers shoot it from there) |
+| form a line (battle) | select, then drag across the ground | select, then drag across the ground |
+| attack (battle) | click an enemy with something selected — archers shoot it, walking into range if needed; others attack it | tap an enemy with something selected — same |
+| charge in (battle) | double-click an enemy — everyone selected fights it hand to hand, archers included | double-tap an enemy |
 | move (battle) | right click on ground | tap ground with something selected |
-| arm an order | Move / Attack button, then click the target | same; the button stays lit while armed |
+| deselect (battle) | click empty ground | tap a selected block again (clears the whole selection) |
 | draw a route (map) | left-drag | drag |
 | set a route (map) | click a destination | tap a destination |
 | box-select | left-drag on ground | drag on ground |
 | zoom | wheel | pinch |
 | pan | right- or middle-drag | two-finger drag |
+
+**Drawing orders.** In battle you draw rather than click. Drag from one of
+your blocks to draw its route — if the block you drag from is selected, the
+whole selection follows it, keeping its
+shape, and squeezes into a column where the ground is too narrow; end the
+stroke on an enemy and they attack it from wherever the route brought them.
+Drag across the ground with blocks selected to set a line: infantry on it,
+archers a rank behind, cavalry on the wings, everyone facing the enemy. The
+battle runs at a quarter speed while you draw. A stroke over the river is
+routed over the bridge.
 
 Picking uses the distance to the block's body plus a pad (10 px for a mouse,
 24 px for a finger), so a block is hit anywhere on its rectangle rather than

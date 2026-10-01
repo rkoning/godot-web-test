@@ -145,6 +145,8 @@ func _draw_glyph(canvas: CanvasItem, s: Site, at: Vector2) -> void:
 
 ## A depot is a square that fills up: how much it is holding, against the
 ## capacity `Yields` reports, is the number the supply system lives or dies by.
+## A hollow ring around it means the masons are still at work — it holds
+## nothing and feeds nobody until `depot_ready_turn`.
 func _draw_depot(canvas: CanvasItem, s: Site, at: Vector2, edge: Color) -> void:
 	var box := Rect2(at - Vector2(GLYPH, GLYPH), Vector2(GLYPH, GLYPH) * 2.0)
 	canvas.draw_rect(box, ThemeColors.PANEL, true)
@@ -154,6 +156,8 @@ func _draw_depot(canvas: CanvasItem, s: Site, at: Vector2, edge: Color) -> void:
 		canvas.draw_rect(Rect2(box.position + Vector2(0.0, box.size.y * (1.0 - full)),
 			Vector2(box.size.x, box.size.y * full)), ThemeColors.ACCENT, true)
 	canvas.draw_rect(box, edge, false, 1.0)
+	if s.depot_ready_turn > view.world.turn:
+		canvas.draw_arc(at, GLYPH * 1.6, 0.0, TAU, 20, ThemeColors.WARN, 1.5)
 
 # ------------------------------------------------------------------- tooltips
 
@@ -168,7 +172,7 @@ func tooltip(world_pos: Vector2) -> String:
 	var owner := "unowned"
 	if region.owner >= 0:
 		owner = world.nation(region.owner).name
-	return "%s — %s. Owner: %s. Posture: %s. Supply +%.0f, Coin +%.0f" % [
+	var text := "%s — %s. Owner: %s. Posture: %s. Supply +%.0f, Coin +%.0f" % [
 		s.name,
 		Site.Kind.keys()[s.kind].capitalize(),
 		owner,
@@ -176,3 +180,10 @@ func tooltip(world_pos: Vector2) -> String:
 		Yields.supply(s, region, world),
 		Yields.coin(s, region, world),
 	]
+	# What a depot is holding is the number the supply lines are judged by, and
+	# one still being built holds nothing yet.
+	if s.kind == Site.Kind.DEPOT:
+		text += ". Stock %d / %d." % [int(s.stock), int(Yields.depot_capacity(s, world))]
+		if s.depot_ready_turn > world.turn:
+			text += " Ready in %d turns." % (s.depot_ready_turn - world.turn)
+	return text

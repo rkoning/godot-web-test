@@ -70,8 +70,16 @@ func _check_shell(root: Control) -> void:
 	t.check("layers are stacked by order()", orders == ascending, str(orders))
 	t.check("the stacks layer is on top and claims 100",
 		view.layers[view.layers.size() - 1].order() == 100, str(orders))
-	t.check("no layer contributes a side panel yet",
-		view.layers.all(func(l): return l.panel() == null))
+	# WS-A's stacks layer contributes the detach panel, so the column is no
+	# longer empty. What is checked is the contract, not the count: a layer
+	# either returns null or returns the *same* Control every time, because
+	# `CampaignRoot` asks again on every rebuild and a fresh node per call
+	# would leak one.
+	t.check("at least one layer contributes a side panel",
+		view.layers.any(func(l): return l.panel() != null))
+	t.check("a layer hands back the same panel instance each call",
+		view.layers.all(func(l): return l.panel() == l.panel()))
+	t.check("the shell built the panel column for it", root._has_panels)
 
 	var world: World = view.world
 	var player := world.player()
@@ -158,10 +166,23 @@ func _check_shell(root: Control) -> void:
 	var near := world.graph.site(adjacent[0])
 	t.check("clicking an adjacent site is consumed as an order", stacks.pressed(near.pos))
 	t.check("the order is that site", mine[0].path == ([near.id] as Array[int]), str(mine[0].path))
-	t.check("clicking a non-adjacent site is not an order", not stacks.pressed(far.pos))
+	# Since WS-A a click orders a route to anywhere `Pathing` can reach, not only
+	# next door, so the refusal a player can still provoke is about *reach*: a
+	# hostile stack standing on a site severs passage through it, and "The Ford"
+	# is the map's only crossing. With the Warlord on Fordwatch, the whole east
+	# bank stops being reachable and the click is refused.
+	var ford := _site_named(world, "Fordwatch")
+	var beyond := _site_named(world, "Fording East")
+	t.check("the map has the ford and the site across it", ford != null and beyond != null)
+	if ford == null or beyond == null:
+		return
+	var blocker := world.add_stack(enemy[0].nation_id, ford.id, [GameConfig.Role.INFANTRY])
+	t.check("clicking an unreachable site is not an order", not stacks.pressed(beyond.pos))
 	t.check("the refused click left the order alone",
 		mine[0].path == ([near.id] as Array[int]), str(mine[0].path))
 	t.check("the stack is still selected after a refused click", view.selected == mine[0])
+	# Put the map back as it was: every check below runs on the seeded world.
+	world.remove_stack(blocker)
 
 	# The battle-view seam: WS-C swaps the map out for its own full-rect view
 	# and puts it back, without CampaignRoot knowing what a battle is.
@@ -208,10 +229,12 @@ func _check_seed_comes_from_map_data(shell: World, player_id: int) -> void:
 	t.check("the map data names the player's army",
 		direct.stacks_of(player_id).size() == 1, str(direct.stacks_of(player_id).size()))
 
-## The site furthest from `from_id` that no edge joins it to: a click there is a
-## destination the stack cannot legally be ordered to. Sites with a stack on
-## them are skipped — a click there selects that stack, which is consumed for a
-## different and perfectly correct reason, and would not test the refusal.
+## The site furthest from `from_id` that no edge joins it to. Since WS-A a click
+## orders a route to anywhere `Pathing` can reach, so a distant site is no longer
+## an illegal destination: this is kept only as a guard check that the map has
+## somewhere far away at all, and the refusal itself is provoked by blocking the
+## ford above. Sites with a stack on them are skipped — a click there selects
+## that stack, which is consumed for a different and perfectly correct reason.
 func _unconnected_site(world: World, from_id: int) -> Site:
 	var from := world.graph.site(from_id)
 	var best: Site = null

@@ -13,10 +13,11 @@ extends RefCounted
 ##   ShopSetup.run        # WS-E  era-1 shop stock, and the refresh listener
 ##   SocietySetup.run     # WS-F  region culture, faith and unrest defaults
 ##   CrisisSetup.run      # WS-H  crisis catalogue and eligibility state
+##   LogisticsSetup.run   # WS-A  opening depot stock
 ##
 ## WS-M (provinces) has no setup slot by design; consolidation is an action.
 
-static var _hooks: Array[Callable] = []
+static var _hooks: Array[Callable] = [LogisticsSetup.run]
 
 ## The live hook list, **by reference**.
 ##

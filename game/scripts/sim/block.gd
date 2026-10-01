@@ -9,7 +9,7 @@ extends RefCounted
 ## the frontage (across the facing) and `size().y` is the depth (along it).
 ## It moves and fights along the short axis, the way a formation does.
 
-enum OrderType { NONE, MOVE, ATTACK, HOLD, WITHDRAW }
+enum OrderType { NONE, MOVE, ATTACK, HOLD, WITHDRAW, SHOOT }
 enum Status { ACTIVE, FLED, DESTROYED }
 
 var id := 0
@@ -26,6 +26,9 @@ var supply := 1.0
 
 var order := OrderType.NONE
 var order_point := Vector2.ZERO
+var route: PackedVector2Array = []    # drawn orders: points still to walk; the last is order_point
+var end_facing := NAN                 # facing to take at the end of a route, NAN = none
+var route_target_id := -1             # enemy to attack when the route ends, -1 = none
 var target_id := -1
 
 var status := Status.ACTIVE
@@ -43,6 +46,14 @@ var hit_flash := 0.0                   # seconds of "just took damage" left, for
 # Bookkeeping for the result screen.
 var withdrew := false
 var ever_routed := false
+
+# Reform: turning to face a flanker while engaged (spec 2026-09-23).
+var reform_left := 0.0                 # seconds left; > 0 means disordered
+var reform_from := 0.0                 # facing when it began, for the view
+var reform_target_id := -1
+
+func reforming() -> bool:
+	return reform_left > 0.0
 
 func _init(p_id: int, p_side: int, p_role: int, p_pos: Vector2, p_facing: float, p_supply: float) -> void:
 	id = p_id
@@ -159,3 +170,10 @@ func arc_from(from: Vector2) -> String:
 func face_towards(dir: Vector2) -> void:
 	if dir.length_squared() > 0.0001:
 		facing = dir.angle()
+
+## Turn toward `angle` at this role's turn rate. Returns how far off it still
+## is, in radians, so the caller can decide whether to walk yet.
+func turn_toward(angle: float, dt: float) -> float:
+	var rate := deg_to_rad(float(stats()["turn_rate"]))
+	facing = rotate_toward(facing, angle, rate * dt)
+	return absf(angle_difference(facing, angle))

@@ -18,6 +18,8 @@ var hold_separate := false
 var label := ""
 var moved_this_turn := false
 var supply_report := {}           # written by SupplyPhase (WS-A), read by UI and AI
+var hunger := 0                   # consecutive turns under the desertion threshold (WS-A)
+var retreat_to := -1              # site a lost battle sent this stack back to this turn, -1 = none (WS-C)
 
 func size() -> int:
 	return regiments.size()

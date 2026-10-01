@@ -1078,6 +1078,28 @@ Orders.build_depot(world, nation, site) -> bool
 8. `logistics/scripted_enemy.gd`: App B's two minimal enemy behaviours, run from `AiPhase` for any nation whose `weights` has `"scripted": "marcher" | "raider"` (WS-D's real AI ignores those nations). **Marcher**: one 10–14 stack follows the road toward the player's depot, forages along the way, splits in two when supply < 40. **Raider**: a 3-regiment cavalry stack targets the edge between the player's depot and largest stack, or the nearest caravan (`world.routes` if WS-B has merged), whichever is closer; flees any stack > 3. Scenario "The Siege" (App B #3). Tests: the marcher splits at < 40; the raider leaves when a 4-stack approaches.
 **Acceptance:** App B acceptance bullets 1–3, 5 and 6.
 
+**Done.** Tasks 1–10 landed (the list above was sliced into ten on the way).
+What the other workstreams need to know:
+
+- **`CampaignRoot.SCENARIOS`** is a new registry beside `LAYERS`, additive the
+  same way: one preload per workstream, each script exposing
+  `static func all() -> Array[Dictionary]` (`{name, lesson}`),
+  `static func world(index, seed) -> World` and
+  `static func status(index, world) -> Dictionary` (`{text, won, lost}`). The
+  HUD's dropdown lists "Campaign" and then every provider's scenarios in
+  registry order; `select_scenario(provider, index)` rebuilds the run.
+  Appending a preload is the whole integration — no other line of the shell
+  changes, and `status()` must stay pure and unlatched.
+- **`MovementPhase` calls `ScriptedEnemy.issue_orders`** for every nation whose
+  `weights` has `"scripted"` set (not `AiPhase`, as task 8 above assumed — the
+  orders have to exist before the same phase walks them). **WS-D's `AiPhase`
+  must skip those nations.**
+- **Orders are given through `Orders`.** The UI, the scripted enemies and WS-D's
+  planner issue every order through `Orders.move/hold/detach/clear`; the only
+  other code that touches `Stack.path`/`Stack.order` is `Movement.walk`, which
+  consumes the path as it walks, and one commented direct clear in the scripted
+  raider's no-escape branch. `Orders.clear(world, stack)` takes back both fields.
+
 ### WS-B — Trade & raiding (Appendix B, milestones 4–5)
 
 **Owns:** `game/scripts/sim/trade/` (`trade_route.gd`, `caravan.gd`, `trade_rules.gd`), `phases/trade_phase.gd`, `ui/layers/trade_layer.gd`, `tests/test_trade.gd`.
@@ -1102,6 +1124,24 @@ AutoResolve.trivial(world, a, b) -> bool                       # ratio ≥ confi
 AutoResolve.resolve(world, pending) -> Dictionary              # deterministic via world.rng; the "battle stub" for AI headless sims
 ```
 **Tasks:** 1. `EngagementPhase` from movement stops (needs WS-A's "stop on hostile site" — until it merges, test by placing stacks directly). 2. `to_armies` + `start` (defender = the stack that did not move; deployment via existing `Scenarios.deploy`). 3. `apply_result` and retreat. 4. `AutoResolve` with visible ratio and rare hidden failure. 5. Extract `battle_view.gd`; `campaign_root` switches to it when `pending_battles` is non-empty and the player is involved; AI-vs-AI battles use `AutoResolve.resolve`. 6. Result screen reuse. **Acceptance:** "Parking on the hill before a battle visibly changes the outcome" now holds from the campaign graph (a test fights the East Hill feature site from the hill and from the plain, same rosters); auto-resolve ratio shown; the 87 combat checks unchanged.
+
+**Done.** Step plan: `2026-09-23-ws-c-battle-bridge.md`. What the others need to know:
+
+- **`World.pending_battles` after EngagementPhase holds only fights waiting for
+  the player** (`{attacker, defender, site_id, from_site, ratio, sides}`); AI and
+  trivial fights are resolved in the phase and logged as "Battle at …". WS-D
+  reads the log or the stacks, not this list.
+- **Standoffs persist.** Hostile stacks left on one site are a battle again next
+  turn. Moving away is how a stack declines.
+- **`BattleBridge.conclude(world, battle, winner, lost, how)`** is the one way a
+  battle ends (losses by role, empty stacks removed, loser retreats, log). WS-B's
+  escort fights and WS-D's planner should call `AutoResolve.resolve` or
+  `conclude` rather than editing regiments.
+- **`BattleView`** is the battle screen for any host; it takes the host's
+  result buttons and HUD insets and pauses when hidden.
+- Not done, by design: regiment health across battles (fled blocks come back
+  whole), leader quality in the battle itself (WS-G), a "let the general fight
+  it" button (`BattleBridge.start(..., ai_plays_player = true)` is ready for it).
 
 ### WS-D — Nation AI (Appendix C, milestones 1–5 and the headless harness)
 

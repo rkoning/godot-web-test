@@ -18,6 +18,17 @@ extends Control
 const LAYERS: Array = [
 	preload("res://scripts/ui/layers/graph_layer.gd"),
 	preload("res://scripts/ui/layers/stacks_layer.gd"),
+	preload("res://scripts/ui/layers/supply_layer.gd"),
+	preload("res://scripts/ui/layers/battle_layer.gd"),
+]
+
+## Scenario providers, one preload per workstream. Each script exposes
+## `static func all() -> Array[Dictionary]` ({name, lesson}),
+## `static func world(index: int, seed: int) -> World` and
+## `static func status(index: int, world: World) -> Dictionary` ({text, won, lost}).
+## The picker lists "Campaign" and then every provider's scenarios in order.
+const SCENARIOS: Array = [
+	preload("res://scripts/sim/logistics/logistics_scenarios.gd"),
 ]
 
 const HUD_MARGIN := 8.0
@@ -25,6 +36,13 @@ const PANEL_WIDTH := 300.0
 const SEED := 1
 
 var view: MapView
+
+var _scenario_provider := -1        # index into SCENARIOS, -1 = the open campaign
+var _scenario_index := 0
+
+## Last answer from `scenario_text()`, with the world state it was computed
+## from. `status()` walks the whole event log, and `_process` asks once a frame.
+var _scenario_cache := {"key": "", "text": ""}
 
 var _hud := {}
 var _layer_buttons: Array = []       # [{"button": Button, "enabled": Callable}]
@@ -76,12 +94,67 @@ func _process(_delta: float) -> void:
 
 # ------------------------------------------------------------------ the world
 
-## One line, deliberately. The starting armies live in the map's `"stacks"`
-## array, not here: the shell, a test and the headless AI harness all build the
-## same world from the same data, and a scenario is a map edit rather than a
-## change to the shell.
+## The open campaign is one line, deliberately: its starting armies live in the
+## map's `"stacks"` array, not here, so the shell, a test and the headless AI
+## harness all build the same world from the same data. A scenario is the same
+## trick one level up — its provider edits that map data and hands back a world,
+## and the shell still knows nothing about what any scenario contains.
 func _seeded_world() -> World:
+	if _scenario_provider >= 0:
+		return SCENARIOS[_scenario_provider].world(_scenario_index, SEED)
 	return World.from_map(PrototypeMap.data(), SEED)
+
+## Switch the run to a scenario (or back to the campaign with provider -1) and
+## rebuild the world from it. The rebuild goes through `_on_reset`, so a switch
+## drops the selection and refits exactly like the Reset button does.
+func select_scenario(provider: int, index: int) -> void:
+	_scenario_provider = provider
+	_scenario_index = index
+	_on_reset()
+
+## The active scenario's progress line, or "" for the open campaign.
+##
+## The provider latches nothing, so this is still read from the world — but only
+## when the world can have changed. Nothing between End Turn and the next one
+## moves a stack or writes a line, so `(turn, events.size())` is a sufficient
+## key, and a `status()` that scans the whole log stops running sixty times a
+## second. A rebuild (`_on_reset`) starts from turn 1 with an empty log, which
+## is the same key *and* the same answer, so it needs no invalidation of its own.
+func scenario_text() -> String:
+	if _scenario_provider < 0:
+		return ""
+	var key := "%d:%d:%d:%d" % [
+		_scenario_provider, _scenario_index, view.world.turn, view.world.events.size()]
+	if str(_scenario_cache["key"]) != key:
+		_scenario_cache = {
+			"key": key,
+			"text": str(SCENARIOS[_scenario_provider].status(_scenario_index, view.world)["text"]),
+		}
+	return str(_scenario_cache["text"])
+
+## The active scenario's one-line lesson, or "" for the open campaign.
+func _scenario_lesson() -> String:
+	if _scenario_provider < 0:
+		return ""
+	var list: Array = SCENARIOS[_scenario_provider].all()
+	if _scenario_index < 0 or _scenario_index >= list.size():
+		return ""
+	return str(list[_scenario_index].get("lesson", ""))
+
+## The dropdown's flat index, unpacked into (provider, scenario). Item 0 is the
+## open campaign; every provider's scenarios follow in registry order, so adding
+## a preload to `SCENARIOS` extends the list without touching this.
+func _on_scenario_picked(i: int) -> void:
+	if i <= 0:
+		select_scenario(-1, 0)
+		return
+	var n := 1
+	for p in SCENARIOS.size():
+		var count: int = SCENARIOS[p].all().size()
+		if i < n + count:
+			select_scenario(p, i - n)
+			return
+		n += count
 
 # -------------------------------------------------------------------- overlays
 
@@ -213,6 +286,17 @@ func _build_hud() -> void:
 	controls.add_child(_button("Reset", _on_reset))
 	controls.add_child(_button("Fit", func(): view.fit()))
 	controls.add_child(_button("Tuning", _on_tuning))
+	# The open campaign, then every registered provider's scenarios in order.
+	var picker := OptionButton.new()
+	picker.focus_mode = Control.FOCUS_NONE
+	picker.custom_minimum_size = Vector2(160, 44)
+	picker.add_item("Campaign")
+	for p in SCENARIOS.size():
+		for sc in SCENARIOS[p].all():
+			picker.add_item(str(sc["name"]))
+	picker.item_selected.connect(_on_scenario_picked)
+	controls.add_child(picker)
+	_hud["scenario"] = picker
 	# Every layer's buttons, in layer order, so a workstream's controls appear
 	# the moment its layer is registered. `enabled` is optional — most buttons
 	# are always available — but a spec with no `action` is a bug in that
@@ -297,6 +381,8 @@ func _tables() -> Dictionary:
 		"strategic": GameConfig.strategic,
 		"run": GameConfig.run,
 		"sites": GameConfig.sites,
+		"logistics": GameConfig.logistics,
+		"battle_bridge": GameConfig.battle_bridge,
 	}
 
 ## One spinner per numeric leaf of every table. Dictionaries are reference
@@ -390,10 +476,17 @@ func _refresh_status() -> void:
 	_hud["status"].text = "Turn %d · Era %d of %d · %s — %d coin, %d influence" % [
 		world.turn, world.era(), int(GameConfig.run["eras"]), who, int(coin), int(influence),
 	]
+	var progress := scenario_text()
+	if progress != "":
+		_hud["status"].text += " · " + progress
 
 	var text := view.tooltip_at(view.hover_world)
 	if text == "":
-		text = "Click a stack to select it, then an adjacent site to order it there."
+		# In a scenario the fallback line is the lesson: the player picked a
+		# set-piece to learn one thing, and that is worth more than the hint.
+		var lesson := _scenario_lesson()
+		text = lesson if lesson != "" \
+			else "Click a stack to select it, then an adjacent site to order it there."
 		if world.events.size() > 0:
 			text += "\n" + world.events[world.events.size() - 1]
 	_hud["info"].text = text

@@ -16,6 +16,7 @@ var stock := 0.0                  # depot stock (WS-A); farms keep nothing here
 var node_tag := ""                # NODE only: horses | iron | grain | salt | timber | dye
 var garrison_nation := -1         # who holds this site (WS-A occupation), -1 = nobody
 var pillaged_until := 0           # yields suppressed while world.turn < this (WS-A)
+var depot_ready_turn := 0         # DEPOT only: usable once world.turn >= this (WS-A build_depot)
 
 static func from_dict(d: Dictionary) -> Site:
 	var s := Site.new()

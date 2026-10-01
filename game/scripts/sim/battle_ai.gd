@@ -45,7 +45,7 @@ static func _attacker(sim: BattleSim, side: int) -> void:
 				else:
 					sim.order_hold(b)
 			_:
-				sim.order_attack(b, target)
+				sim.order_attack(b, _fight_target(sim, b, target))
 
 static func _defender(sim: BattleSim, side: int) -> void:
 	var own := sim.side_blocks(side)
@@ -91,11 +91,45 @@ static func _cavalry(sim: BattleSim, b: Block, target: Block, foes: Array[Block]
 	if pinned != null:
 		target = pinned
 
+	# Already charging this target from off its front: see the charge through.
+	# The charge itself carries the block away from the flank point, so testing
+	# that distance again mid-charge flips it back to "go to the flank" — and a
+	# slow enough block then pivots between the two headings every rethink and
+	# never gets anywhere (found when cavalry went from 45 to 30 u/s).
+	if b.order == Block.OrderType.ATTACK and b.target_id == target.id \
+			and sim.arc_of(target, b.pos) != "front":
+		sim.order_attack(b, _fight_target(sim, b, target))
+		return
+
 	var flank := _flank_point(target)
 	if b.pos.distance_to(flank) > GameConfig.combat["charge_min_distance"]:
 		_move_to(sim, b, flank)
 	else:
-		sim.order_attack(b, target)
+		sim.order_attack(b, _fight_target(sim, b, target))
+
+## Who an engaged block should attack. Switching to a foe off its front starts a
+## reform, so it keeps what it has: its reform target while reforming, else the
+## nearest foe touching its front. Only when nothing touches its front does it
+## turn on a flanker (one reform), and only when nothing touches it at all does
+## it go after `fallback`.
+static func _fight_target(sim: BattleSim, b: Block, fallback: Block) -> Block:
+	if b.reforming():
+		var reform_target := sim.block_by_id(b.reform_target_id)
+		if reform_target != null and reform_target.alive():
+			return reform_target
+	var touching: Array[Block] = []
+	for c: Block in sim.contacts_of(b):
+		if c.alive():
+			touching.append(c)
+	if touching.is_empty():
+		return fallback
+	var front: Array[Block] = []
+	for c in touching:
+		if sim.arc_of(b, c.pos) == "front":
+			front.append(c)
+	if not front.is_empty():
+		return _nearest(b, front)
+	return fallback if touching.has(fallback) else _nearest(b, touching)
 
 static func _flank_point(target: Block) -> Vector2:
 	var side_dir := Vector2.UP.rotated(target.facing)

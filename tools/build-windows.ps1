@@ -20,7 +20,7 @@
   .\tools\build-windows.ps1
   .\tools\build-windows.ps1 -Godot "C:\Godot\Godot_v4.5-stable_win64.exe" -Debug -Run
 #>
-[CmdletBinding()]
+# No [CmdletBinding()]: it adds a -Debug common parameter that clashes with ours.
 param(
     [string]$Godot = $env:GODOT,
     [switch]$Debug,      # export the debug template (script errors shown in the console)
